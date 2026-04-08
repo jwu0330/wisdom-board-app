@@ -3,7 +3,9 @@ use tauri::{Manager, Runtime, WebviewWindow};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowExW, FindWindowW, SendMessageTimeoutW, SetParent, SMTO_NORMAL,
+    EnumWindows, FindWindowExW, FindWindowW, GetSystemMetrics, MoveWindow,
+    SendMessageTimeoutW, SetParent, ShowWindow,
+    SM_CXSCREEN, SM_CYSCREEN, SMTO_NORMAL, SW_SHOW,
 };
 
 static WORKERW_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -74,7 +76,16 @@ pub fn pin_to_desktop<R: Runtime>(window: &WebviewWindow<R>) -> bool {
             return false;
         }
 
-        println!("[WisdomBoard] 成功掛載到桌面圖層");
+        // 5. SetParent 後視窗可能隱藏或尺寸歸零，需顯式設定
+        let screen_w = GetSystemMetrics(SM_CXSCREEN);
+        let screen_h = GetSystemMetrics(SM_CYSCREEN);
+        let _ = MoveWindow(tauri_hwnd, 0, 0, screen_w, screen_h, BOOL(1));
+        ShowWindow(tauri_hwnd, SW_SHOW);
+
+        println!(
+            "[WisdomBoard] 成功掛載到桌面圖層 ({}x{})",
+            screen_w, screen_h
+        );
         true
     }
 }
