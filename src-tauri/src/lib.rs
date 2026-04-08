@@ -4,8 +4,8 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
-use tauri::{Manager, Runtime, WebviewWindow};
 use std::sync::atomic::{AtomicIsize, Ordering};
+use tauri::{Manager, Runtime, WebviewWindow};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -33,7 +33,7 @@ pub fn pin_to_desktop<R: Runtime>(window: &WebviewWindow<R>) {
     unsafe {
         // 1. 找到 Progman
         let progman = FindWindowW(w!("Progman"), PCWSTR::null());
-        
+
         // 2. 發送 0x052C 訊息給 Progman，強迫生成 WorkerW 圖層
         let _ = SendMessageTimeoutW(
             progman,
@@ -56,18 +56,44 @@ pub fn pin_to_desktop<R: Runtime>(window: &WebviewWindow<R>) {
             progman
         };
 
-        SetParent(tauri_hwnd, target_hwnd); 
+        SetParent(tauri_hwnd, target_hwnd);
     }
 }
+
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec![])))
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // 在啟動時將主視窗掛載到桌面底層
             let main_window = app.get_webview_window("main").unwrap();
             pin_to_desktop(&main_window);
+
+            // 建立系統匣選單 (System Tray)
+            let refresh_i = MenuItem::with_id(app, "refresh", "重整畫面", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "離開", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&refresh_i, &quit_i])?;
+
+            let _tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .icon(app.default_window_icon().unwrap().clone())
+                .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "refresh" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.eval("window.location.reload();");
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![greet])
