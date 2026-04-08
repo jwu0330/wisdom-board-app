@@ -5,22 +5,58 @@ fn greet(name: &str) -> String {
 }
 
 use tauri::{Manager, Runtime, WebviewWindow};
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SendMessageW, SetParent};
+use std::sync::atomic::{AtomicIsize, Ordering};
+use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM, WPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, FindWindowExW, FindWindowW, SendMessageTimeoutW, SetParent, SMTO_NORMAL,
+};
+
+static WORKERW_HWND: AtomicIsize = AtomicIsize::new(0);
+
+unsafe extern "system" fn enum_windows_proc(hwnd: HWND, _: LPARAM) -> BOOL {
+    let p = FindWindowExW(hwnd, HWND(0), w!("SHELLDLL_DefView"), PCWSTR::null());
+    if p != HWND(0) {
+        // 找到有 SHELLDLL_DefView 的 WorkerW 的下一個 WorkerW 就是我們要的桌面圖層
+        let workerw = FindWindowExW(HWND(0), hwnd, w!("WorkerW"), PCWSTR::null());
+        if workerw != HWND(0) {
+            WORKERW_HWND.store(workerw.0 as isize, Ordering::SeqCst);
+        }
+    }
+    BOOL(1) // 繼續遍歷
+}
 
 pub fn pin_to_desktop<R: Runtime>(window: &WebviewWindow<R>) {
-    let hwnd = window.hwnd().unwrap().0 as isize;
-    let hwnd = HWND(hwnd as *mut _);
+    let tauri_hwnd = window.hwnd().unwrap().0 as isize;
+    let tauri_hwnd = HWND(tauri_hwnd as *mut _);
 
     unsafe {
         // 1. 找到 Progman
-        let progman = FindWindowW(None, None);
+        let progman = FindWindowW(w!("Progman"), PCWSTR::null());
         
-        // 2. 發送 0x052C 訊息，觸發 WorkerW 生成
-        SendMessageW(progman, 0x052C, WPARAM(0), LPARAM(0));
+        // 2. 發送 0x052C 訊息給 Progman，強迫生成 WorkerW 圖層
+        let _ = SendMessageTimeoutW(
+            progman,
+            0x052C,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_NORMAL,
+            1000,
+            None,
+        );
 
-        // 3. 為了簡化初期開發，我們先將父層設為 progman (未來可改進為尋找正確的 WorkerW)
-        SetParent(hwnd, progman); 
+        // 3. 遍歷所有的 WorkerW 以尋找剛剛生成的目標層級
+        EnumWindows(Some(enum_windows_proc), LPARAM(0));
+
+        // 4. 掛載 Tauri 視窗到找到的 WorkerW 下，如果沒找到就退回掛在 Progman
+        let worker_isize = WORKERW_HWND.load(Ordering::SeqCst);
+        let target_hwnd = if worker_isize != 0 {
+            HWND(worker_isize as *mut _)
+        } else {
+            progman
+        };
+
+        SetParent(tauri_hwnd, target_hwnd); 
     }
 }
 
