@@ -5,6 +5,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      skip_bundle:
+        description: '快速模式：只產生 EXE，跳過安裝包'
+        required: false
+        default: false
+        type: boolean
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -21,6 +27,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: 'npm'
 
       - name: Install Rust (with Windows SDK)
         uses: dtolnay/rust-toolchain@stable
@@ -36,11 +43,16 @@ jobs:
           workspaces: "src-tauri -> target"
 
       - name: Install Frontend Dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Build Tauri EXE
+      - name: Build Tauri EXE (快速模式)
+        if: ${{ github.event.inputs.skip_bundle == 'true' }}
+        run: npm run tauri build -- --no-bundle
+
+      - name: Build Tauri EXE (完整模式)
+        if: ${{ github.event.inputs.skip_bundle != 'true' }}
         run: npm run tauri build
-        
+
       - name: Upload EXE Artifact
         uses: actions/upload-artifact@v4
         with:
