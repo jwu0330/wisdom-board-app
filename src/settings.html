@@ -84,7 +84,7 @@
         <div class="dlg-h"><span>新增面板</span><button id="dlg-x">&#x2715;</button></div>
         <div class="dlg-b">
           <div class="opt" id="opt-url"><b>貼上網址</b><small>輸入 URL 顯示在面板中</small></div>
-          <div class="opt" id="opt-cap"><b>新增空白面板</b><small>建立可自由調整位置和大小的面板</small></div>
+          <div class="opt" id="opt-cap"><b>框選螢幕區域</b><small>拖拉滑鼠框選要擷取的螢幕區域</small></div>
           <div class="url-area" id="url-area">
             <input id="url-in" placeholder="https://example.com" />
             <div class="err" id="url-err"></div>
@@ -194,6 +194,20 @@
       });
 
       render();
+
+      // Debug: Ctrl+Click 標題觸發測試
+      document.querySelector(".top h1").addEventListener("click", async (e) => {
+        if (!e.ctrlKey) return;
+        document.getElementById("st").textContent = "執行 Debug 測試中...";
+        try {
+          const result = await invoke("run_debug_tests");
+          alert("=== DEBUG REPORT ===\n\n" + result);
+          document.getElementById("st").textContent = "Debug 完成";
+        } catch (err) {
+          alert("Debug 失敗: " + err);
+          document.getElementById("st").textContent = "Debug 失敗: " + err;
+        }
+      });
     </script>
   </body>
 </html>

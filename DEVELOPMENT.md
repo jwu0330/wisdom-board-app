@@ -24,14 +24,18 @@
 
 **WisdomBoard（靈魂桌面．智匯看板）** 是一款 Windows 桌面應用程式，核心功能為：
 
-- **桌面嵌入**：將網頁內容嵌入桌面壁紙與圖示之間的 WorkerW 圖層
-- **佈告欄**（開發中）：即時裁切任意視窗的特定區域，產生可互動的釘選面板
+- **面板釘選**：將網頁 URL 或螢幕擷取區域以 always-on-top 面板形式釘選於桌面
+- **框選擷取**：全域快捷鍵觸發螢幕截圖式 Overlay，拖拉框選產生面板
 - **系統匣控制**：透過右下角系統匣圖示進行操作
 - **開機自啟動**：Windows 開機時自動啟動
 
 ### 核心價值
 
 讓生產力工具像桌布一樣自然存在於桌面，無需切換視窗即可檢視和操作。
+
+### 桌面嵌入（規劃中，尚未實作）
+
+SPECIFICATION.md 描述的 WorkerW 桌面嵌入功能（F02）目前尚未實作。當前所有面板使用 `always_on_top` 方式釘選。
 
 ---
 
@@ -41,14 +45,10 @@
 ┌─────────────────────────────────────────────────┐
 │                   使用者桌面                       │
 │  ┌──────────────┐  ┌──────────────┐              │
-│  │  桌面圖示層    │  │  佈告欄面板    │ ← 最前端顯示  │
+│  │  系統匣圖示    │  │  面板視窗      │ ← always on top│
 │  └──────────────┘  └──────────────┘              │
 │  ┌──────────────────────────────────┐            │
-│  │  WisdomBoard 主視窗 (WorkerW 層)  │ ← 桌布之上   │
-│  │  └─ WebView2 (GitHub Projects)   │            │
-│  └──────────────────────────────────┘            │
-│  ┌──────────────────────────────────┐            │
-│  │  桌面壁紙                         │            │
+│  │  WisdomBoard 主視窗（隱藏）        │            │
 │  └──────────────────────────────────┘            │
 └─────────────────────────────────────────────────┘
 ```
@@ -57,9 +57,9 @@
 
 | 層級 | 技術 | 用途 |
 |------|------|------|
-| 前端 | TypeScript + Vite + HTML/CSS | WebView 介面與佈告欄 UI |
-| 後端 | Rust + Tauri v2 | 桌面整合、Windows API 操作 |
-| 系統 API | `windows` crate (0.52) | WorkerW 掛載、DWM Thumbnail、全域快捷鍵 |
+| 前端 | TypeScript + Vite + HTML/CSS | 設定介面與面板 UI |
+| 後端 | Rust + Tauri v2 | 系統整合、Windows API 操作 |
+| 系統 API | `windows` crate (0.52) | 螢幕截圖、全域快捷鍵 |
 | 外掛 | `tauri-plugin-autostart` | 開機自啟動 |
 | CI/CD | GitHub Actions | 自動建置 Windows EXE |
 
@@ -73,20 +73,24 @@ wisdomboard/
 │   └── workflows/
 │       └── build.yml              # CI/CD：自動建置 Windows EXE
 ├── src/                           # 前端程式碼
-│   ├── main.ts                    # 前端進入點
-│   ├── index.html                 # HTML 主頁（含 iframe）
-│   ├── styles.css                 # 全域樣式
-│   └── assets/                    # 靜態資源
+│   ├── main.ts                    # 前端進入點（主視窗隱藏，無邏輯）
+│   ├── index.html                 # 主視窗 HTML（隱藏，無內容）
+│   ├── settings.html              # 設定視窗（面板管理 UI）
+│   ├── panel.html                 # 面板視窗（含模式切換工具列）
+│   ├── overlay.html               # 框選 Overlay（截圖背景 + 拖拉框選）
+│   ├── webpanel.html              # URL 面板（iframe 載入，備用方案）
+│   └── styles.css                 # 全域樣式（白底極簡風格）
 ├── src-tauri/                     # Rust 後端
 │   ├── src/
 │   │   ├── main.rs                # 程式進入點（呼叫 lib::run）
-│   │   └── lib.rs                 # 核心邏輯：桌面掛載 + 系統匣
+│   │   └── lib.rs                 # 核心邏輯：面板管理 + 系統匣
 │   ├── Cargo.toml                 # Rust 依賴管理
 │   ├── tauri.conf.json            # Tauri 應用設定
 │   ├── capabilities/              # 權限定義
 │   │   ├── default.json           # 主視窗權限
 │   │   └── desktop.json           # 桌面功能權限（autostart）
 │   └── icons/                     # 應用程式圖示
+├── index.html                     # Vite 入口點（主視窗，隱藏）
 ├── package.json                   # Node.js 依賴
 ├── tsconfig.json                  # TypeScript 設定
 ├── vite.config.ts                 # Vite 打包設定
@@ -98,39 +102,21 @@ wisdomboard/
 
 ## 4. 程式碼邏輯說明
 
-### 4.1 桌面掛載流程 (`src-tauri/src/lib.rs`)
+### 4.1 全域快捷鍵 (`lib.rs`)
 
-這是整個應用的核心「黑魔法」邏輯：
+使用 `RegisterHotKey` 註冊 Ctrl+Alt+S，在獨立執行緒中以 `GetMessageW` 迴圈監聽：
 
-```
-Step 1: FindWindowW("Progman")
-        → 找到桌面的 Progman 視窗
-
-Step 2: SendMessage(Progman, 0x052C)
-        → 強迫 Windows 生成新的 WorkerW 圖層
-
-Step 3: EnumWindows → enum_windows_proc
-        → 遍歷所有視窗，找到包含 SHELLDLL_DefView 的 WorkerW
-        → 取得其「下一個」WorkerW 作為目標掛載點
-
-Step 4: SetParent(Tauri_HWND, WorkerW_HWND)
-        → 將 Tauri 視窗設為 WorkerW 的子視窗
-        → 效果：視窗顯示在桌面圖示之下、壁紙之上
+```rust
+RegisterHotKey(HWND(0), HOTKEY_SNIP, MOD_ALT | MOD_CONTROL, 0x53); // 'S'
 ```
 
-**關鍵全域變數：**
-- `WORKERW_HWND: AtomicIsize` — 儲存找到的目標 WorkerW 句柄
-
-**錯誤處理策略（v0.2.0 改善）：**
-- 所有 `unwrap()` 已替換為 `match` + `eprintln!` 錯誤日誌
-- `pin_to_desktop()` 回傳 `bool` 表示成功/失敗
-- 找不到 WorkerW 時會回退掛載到 Progman
+觸發後開啟設定視窗（`open_settings`）。
 
 ### 4.2 系統匣 (System Tray)
 
-在 `run()` 函式的 `.setup()` 中建立：
+在 `run()` 函式的 `.setup()` 中建立，提供兩個選項：
 
-- **重整畫面**：呼叫 `window.eval("window.location.reload()")` 重新載入 WebView
+- **設定 (Ctrl+Alt+S)**：開啟設定視窗
 - **離開**：呼叫 `app.exit(0)` 結束程式
 
 ### 4.3 開機自啟動
@@ -143,12 +129,29 @@ if !autostart_manager.is_enabled().unwrap_or(false) {
 }
 ```
 
-### 4.4 前端 (`src/index.html`)
+### 4.4 面板系統
 
-目前為單純的全螢幕 iframe，嵌入 GitHub Projects 看板：
-```html
-<iframe src="https://github.com/users/jwu0330/projects/2/views/3"></iframe>
-```
+面板分兩種：
+- **URL 面板**：`create_url_panel` 使用 `WebviewUrl::External` 直接載入外部網頁
+- **擷取面板**：`capture_region` 在框選位置建立空白 panel.html 面板
+
+### 4.5 四種操作模式
+
+| 模式 | 行為 |
+|------|------|
+| **觀看 (view)** | 面板可拖拉移動，不可調整大小 |
+| **操作 (interact)** | 可與面板內容互動 |
+| **調整 (resize)** | 可拖拉調整面板大小 |
+| **鎖定 (locked)** | 面板固定不動，不可關閉/移動 |
+
+settings.html 的 pill 按鈕直接設定模式；panel.html 的工具列支援「再按鎖定 = 解鎖」的 toggle UX。
+
+### 4.6 螢幕截圖與框選 Overlay
+
+1. `open_capture_overlay` 先呼叫 `capture_screen_to_file()` 截取全螢幕 BMP
+2. 建立全螢幕不透明 Overlay 視窗，以截圖作為背景（模擬透明效果）
+3. 使用者拖拉框選區域，前端傳送 CSS 像素座標
+4. `capture_region` 將座標乘以 DPI 縮放因子轉為物理像素，在該位置建立面板
 
 ---
 
@@ -260,41 +263,34 @@ gh run download -n WisdomBoard-Portable
 
 ```
 1. 使用者按下快捷鍵（預設 Ctrl+Alt+S）
-2. 畫面進入「選取模式」— 全螢幕透明 Overlay
-3. 點選目標視窗
-4. 拖拉框選要截錄的區域
-5. 產生一個「釘選面板」小視窗
-6. 面板即時顯示目標區域的內容（DWM Thumbnail）
-7. 可在面板中直接操作目標視窗（輸入轉發）
+2. 畫面進入「選取模式」— 全螢幕截圖式 Overlay
+3. 拖拉框選要擷取的區域
+4. 產生一個「釘選面板」小視窗
+5. （未來）面板即時顯示目標區域的內容（DWM Thumbnail）
+6. （未來）可在面板中直接操作目標視窗（輸入轉發）
 ```
 
-### 7.3 三種操作模式
+### 7.3 四種操作模式
 
 | 模式 | 行為 | 觸發方式 |
 |------|------|----------|
-| **鎖定模式**（預設）| 面板固定不動，不可關閉/移動 | 預設狀態 |
-| **編輯模式** | 可移動、縮放、關閉面板 | 系統匣/快捷鍵 |
-| **控制輸入模式** | 點擊/鍵盤轉發到目標視窗 | 系統匣/快捷鍵 |
+| **觀看模式**（預設）| 面板可拖拉移動 | 預設狀態 |
+| **操作模式** | 可與面板內容互動 | 設定視窗 pill / 面板工具列 |
+| **調整模式** | 可拖拉調整大小 | 設定視窗 pill / 面板工具列 |
+| **鎖定模式** | 面板固定不動，不可關閉 | 設定視窗 pill / 面板工具列 |
 
 ### 7.4 技術實作
 
-| 模組 | Windows API | 說明 |
-|------|-------------|------|
-| 即時畫面 | `DwmRegisterThumbnail` | DWM 即時縮圖，非截圖 |
-| 輸入轉發 | `SendInput` / `PostMessage` | 座標映射後模擬輸入 |
-| 全域快捷鍵 | `RegisterHotKey` | 可自訂的全域快捷鍵 |
-| 面板持久化 | JSON 設定檔 | 儲存/恢復面板配置 |
-
-### 7.5 開發階段
-
-| 階段 | 內容 | 狀態 |
+| 模組 | 狀態 | 說明 |
 |------|------|------|
-| Step 0 | 穩定性修復 | ✅ 完成 |
-| Step 1 | 全域快捷鍵 + 選取 Overlay | 待開發 |
-| Step 2 | DWM Thumbnail 即時面板 | 待開發 |
-| Step 3 | 三模式切換 + 工具列 UI | 待開發 |
-| Step 4 | 設定持久化 + 開機恢復 | 待開發 |
-| Step 5 | 自訂快捷鍵 UI | 待開發 |
+| 全域快捷鍵 | ✅ 已實作 | `RegisterHotKey` Ctrl+Alt+S |
+| 截圖式 Overlay | ✅ 已實作 | GDI 截圖 + 全螢幕 Overlay + 拖拉框選 |
+| 面板管理 UI | ✅ 已實作 | settings.html 面板列表 + 模式/縮放控制 |
+| URL 面板 | ✅ 已實作 | `WebviewUrl::External` 直接載入 |
+| DWM Thumbnail | ❌ 待開發 | 即時縮圖，非截圖 |
+| 輸入轉發 | ❌ 待開發 | `SendInput` / `PostMessage` 座標映射 |
+| 面板持久化 | ❌ 待開發 | JSON 設定檔儲存/恢復面板配置 |
+| 自訂快捷鍵 | ❌ 待開發 | UI 設定自訂快捷鍵組合 |
 
 ---
 
@@ -302,22 +298,32 @@ gh run download -n WisdomBoard-Portable
 
 ### v0.2.0-dev 修復項目
 
-| 問題 | 修復方式 | 檔案 |
-|------|----------|------|
-| `window.hwnd().unwrap()` 可能 panic | 改為 `match` + 錯誤日誌 | `lib.rs:31` |
-| `get_webview_window("main").unwrap()` | 改為 `if let Some()` | `lib.rs:88` |
-| `greet` 指令殘留未使用 | 移除 greet 函式與 invoke_handler | `lib.rs` |
-| autostart 插件載入但未啟用 | 加入 `autostart_manager.enable()` | `lib.rs:84` |
-| `EnumWindows` 前未重置全域變數 | 呼叫前重置 `WORKERW_HWND` 為 0 | `lib.rs:54` |
-| `SetParent` 無錯誤處理 | 比較 `HWND(0)` 判斷失敗 | `lib.rs:72` |
-| `SetParent` 誤用 `match Ok/Err` | 修正為比較回傳值（見踩坑紀錄） | `lib.rs:70-75` |
+| 問題 | 修復方式 |
+|------|----------|
+| `window.hwnd().unwrap()` 可能 panic | 改為 `match` + 錯誤日誌 |
+| `get_webview_window("main").unwrap()` | 改為 `if let Some()` |
+| `greet` 指令殘留未使用 | 移除 greet 函式與 invoke_handler |
+| autostart 插件載入但未啟用 | 加入 `autostart_manager.enable()` |
+| 版本號不一致 (0.1.0 / 0.2.0) | 統一為 0.2.0 |
+| base64 / urlencoding 依賴未使用 | 移除無用 crate |
+| URL 面板先載入 webpanel.html 再 navigate() | 改用 `WebviewUrl::External` 直接載入 |
+| 面板找不到時靜默成功 | 改為回傳錯誤 |
+| panel.html toggle 邏輯與 settings 不一致 | setMode 改為直接設定，toggle 只在 click handler |
+| set_mode 廣播到所有視窗 | 改為只對 panel-* 視窗發送 |
+| 截圖 BMP 上下顛倒 | biHeight 改為負值（top-down BMP） |
+| overlay 框選座標未考慮 DPI | capture_region 乘以 scale factor |
+| styles.css 深色主題與設計不符 | 改為白底黑字極簡風格 |
+| Cargo.toml description/authors 為模板值 | 更新為專案實際資訊 |
+| capabilities 只授權 main 視窗 | 擴展到 settings/overlay/panel-* |
+| 根 index.html 為 Tauri 模板 | 替換為最小化頁面 |
+| README.md 為模板內容 | 重寫為專案說明 |
 
 ---
 
 ## 9. 注意事項
 
 ### 安全性
-- `tauri.conf.json` 中 `csp: null`（CSP 停用），這是為了允許 iframe 載入外部網站
+- `tauri.conf.json` 中 `csp: null`（CSP 停用），這是為了允許載入外部網站
 - 未來應限縮 CSP 至僅允許特定來源
 
 ### 建置相關
@@ -334,60 +340,11 @@ gh run download -n WisdomBoard-Portable
 
 ## 10. 踩坑紀錄與經驗教訓
 
-### 10.0 目前開發困境與待解決問題（2026-04-08）
+### 10.1 全螢幕透明 Overlay 無法實現
 
-#### 困境 1：全螢幕透明 Overlay 無法實現
-**目標：** 框選螢幕區域時需要一個半透明全螢幕覆蓋層（像 Windows 截圖工具）。
-**問題：**
-- `transparent: true` + `fullscreen: true` → Tauri 在 Windows 上直接閃退
-- `transparent: true` + `maximized: true` → 同樣閃退
-- `transparent: false` + 任何背景色 → 變成不透明視窗，完全遮住桌面無法看到底下內容
-- CSS `rgba()` 半透明背景在不透明視窗上無效，仍然是全白
+**問題：** `transparent: true` + `fullscreen: true` → Tauri 在 Windows 上直接閃退。
 
-**根本原因：** Tauri v2 + WebView2 在 Windows 上的透明視窗支援有限。WebView2 本身需要特殊設定才能支援透明背景。
-
-**替代方案待研究：**
-1. 使用 Windows API 直接截取螢幕截圖，顯示在不透明視窗上讓使用者框選（模擬透明效果）
-2. 使用 `ICoreWebView2Controller::put_DefaultBackgroundColor` 設定 WebView2 透明背景
-3. 放棄 Overlay 方式，改用其他互動模式（如：在設定視窗中選擇目標視窗+區域）
-
-#### 困境 2：URL 面板載入空白
-**目標：** 在面板視窗中載入外部網頁（如 google.com）。
-**問題：**
-- `WebviewUrl::External(url)` → 動態建立的視窗載入外部 URL 顯示空白
-- 本地 HTML + iframe → 部分網站封鎖 iframe（X-Frame-Options）
-- 本地 HTML + `window.location.href` → 跳轉後頁面也是空白
-
-**可能原因：**
-- 動態建立的 WebView 視窗可能缺少必要的權限或安全設定
-- capabilities 中的 `"windows": ["*"]` 通配符可能未正確匹配
-- WebView2 的安全策略可能阻擋外部 URL 載入
-
-**待驗證：**
-- 檢查 Tauri v2 動態視窗的 CSP 設定
-- 嘗試在 tauri.conf.json 中預定義面板視窗
-- 檢查 WebView2 DevTools 的 Console 錯誤訊息
-
-#### 困境 3：UI 設計方向
-**使用者需求：** 極簡風格 — 白底/黑字、直角方框、無多餘色彩
-**目前狀態：** 使用深色主題（#1e1e2e 背景）+ 圓角 + 多色按鈕
-**待修正：** 全部改為白底黑字極簡風格
-
-### 10.1 SetParent 後視窗消失（Windows 11）
-
-**問題：** 呼叫 `SetParent` 將視窗掛載到 WorkerW 後，視窗在 Windows 11 上不可見。
-
-**根本原因：** Windows 11 的 `SetParent` 會將子視窗的尺寸重置或隱藏，需要顯式重新顯示和定位。
-
-**解決方式：** 在 `SetParent` 之後立即呼叫：
-```rust
-let screen_w = GetSystemMetrics(SM_CXSCREEN);
-let screen_h = GetSystemMetrics(SM_CYSCREEN);
-MoveWindow(hwnd, 0, 0, screen_w, screen_h, BOOL(1));  // 填滿螢幕
-ShowWindow(hwnd, SW_SHOW);                              // 顯式顯示
-```
-
-**教訓：** 任何使用 `SetParent` 重新掛載視窗的操作，之後都必須重新設定位置、大小和可見性。
+**替代方案（已實作）：** 使用 GDI 截取螢幕截圖，顯示在不透明全螢幕視窗上，模擬透明效果。
 
 ### 10.2 windows crate API 回傳型態不一致
 
@@ -396,33 +353,19 @@ ShowWindow(hwnd, SW_SHOW);                              // 顯式顯示
 | 函式 | 回傳型態 | 錯誤檢查方式 |
 |------|----------|-------------|
 | `FindWindowW` | `HWND` | `== HWND(0)` 表示找不到 |
-| `FindWindowExW` | `HWND` | `== HWND(0)` 表示找不到 |
-| `SendMessageTimeoutW` | `LRESULT` | `== LRESULT(0)` 表示逾時/失敗 |
 | `SetParent` | `HWND` | `== HWND(0)` 表示失敗 |
 | `EnumWindows` | `Result<()>` | 標準 `Result` 錯誤處理 |
 
-**教訓：** 不能假設所有 Win32 函式都回傳 `Result`。在使用 `match Ok/Err` 之前，必須先到 `~/.cargo/registry/src/` 中確認該函式的實際簽名：
-```bash
-grep "pub unsafe fn 函式名稱" ~/.cargo/registry/src/index.crates.io-*/windows-0.52.0/src/Windows/Win32/UI/WindowsAndMessaging/mod.rs
-```
+**教訓：** 不能假設所有 Win32 函式都回傳 `Result`，必須先確認實際簽名。
 
-### 10.2 本機無法編譯 Rust（缺少 Windows SDK）
-
-**問題：** 本機有 VS 2022 Community 和 Rust toolchain，但未安裝 Windows SDK，導致 `rust-lld` 找不到 `kernel32.lib`。
+### 10.3 本機無法編譯 Rust（缺少 Windows SDK）
 
 **解決方式：** 所有建置透過 GitHub Actions 完成（`windows-latest` runner 已內建完整 SDK）。
 
-**如需本機編譯：** 透過 Visual Studio Installer → 修改 → 個別元件 → 勾選「Windows 11 SDK」。
+如需本機編譯：透過 Visual Studio Installer → 修改 → 個別元件 → 勾選「Windows 11 SDK」。
 
-### 10.3 修改程式碼後務必驗證 API 簽名
+### 10.4 SetParent 後視窗消失（Windows 11）
 
-**流程：** 修改 Rust 程式碼 → 確認所有使用的 API 簽名 → 提交 → 推送 → 等 CI/CD 結果
+**根本原因：** Windows 11 的 `SetParent` 會將子視窗的尺寸重置或隱藏。
 
-**驗證方法：**
-```bash
-# 查看某個 crate 中函式的實際簽名
-grep "pub unsafe fn 函式名" ~/.cargo/registry/src/index.crates.io-*/crate-name-version/src/**/*.rs
-
-# 查看 trait 定義
-grep -A5 "pub trait TraitName" ~/.cargo/registry/src/index.crates.io-*/crate-name-version/src/**/*.rs
-```
+**解決方式：** 在 `SetParent` 之後立即呼叫 `MoveWindow` + `ShowWindow`。

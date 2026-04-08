@@ -6,40 +6,53 @@
     * { margin:0; padding:0; box-sizing:border-box; }
     body { width:100vw; height:100vh; overflow:hidden; background:#fff; }
     iframe { width:100%; height:100%; border:none; }
-    #err { display:none; color:#f38ba8; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
-      font-size:13px; text-align:center; padding:40px 20px; }
-    #err b { display:block; font-size:16px; margin-bottom:8px; color:#cdd6f4; }
-    #err .url { font-size:11px; opacity:0.4; word-break:break-all; margin-top:12px; }
+    #status {
+      display:flex; align-items:center; justify-content:center;
+      width:100%; height:100%;
+      color:#999; font-family:"Segoe UI","Microsoft JhengHei",sans-serif;
+      font-size:13px; text-align:center;
+    }
+    #status.hidden { display:none; }
   </style>
 </head>
 <body>
-  <iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
-  <div id="err">
-    <b>無法載入頁面</b>
-    <span id="err-msg"></span>
-    <div class="url" id="err-url"></div>
-  </div>
+  <div id="status">載入中...</div>
+  <iframe id="frame" style="display:none"></iframe>
   <script>
-    const params = new URLSearchParams(window.location.search);
-    const url = params.get("url");
-    const frame = document.getElementById("frame");
-    const errEl = document.getElementById("err");
+    var frame = document.getElementById("frame");
+    var status = document.getElementById("status");
 
+    // URL 由 Rust eval 注入：設定 frame.src
+    // 也支援 query string 方式（備用）
+    var params = new URLSearchParams(window.location.search);
+    var url = params.get("url");
     if (url) {
-      frame.src = url;
-      // 如果 iframe 載入失敗（X-Frame-Options 等），3 秒後改用直接導航
-      let loaded = false;
-      frame.onload = () => { loaded = true; };
-      setTimeout(() => {
-        if (!loaded) {
-          // iframe 可能被封鎖，改用直接導航
-          window.location.href = url;
-        }
-      }, 3000);
-    } else {
-      frame.style.display = "none";
-      errEl.style.display = "block";
-      document.getElementById("err-msg").textContent = "未提供網址";
+      loadUrl(url);
+    }
+
+    // 監聽 Rust eval 設定的 src
+    var observer = new MutationObserver(function() {
+      if (frame.src && frame.src !== "about:blank" && frame.src !== window.location.href) {
+        status.className = "hidden";
+        frame.style.display = "block";
+        observer.disconnect();
+      }
+    });
+    observer.observe(frame, { attributes: true, attributeFilter: ["src"] });
+
+    frame.onload = function() {
+      status.className = "hidden";
+      frame.style.display = "block";
+    };
+
+    frame.onerror = function() {
+      status.textContent = "無法載入頁面";
+    };
+
+    function loadUrl(u) {
+      frame.src = u;
+      status.className = "hidden";
+      frame.style.display = "block";
     }
   </script>
 </body>

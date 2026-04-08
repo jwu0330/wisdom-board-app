@@ -55,7 +55,12 @@
       document.querySelectorAll("#bar button[data-m]").forEach(function(btn){
         btn.addEventListener("click", function(){
           if (locked && btn.dataset.m !== "locked") return;
-          setMode(btn.dataset.m);
+          // 點擊鎖定按鈕時 toggle：已鎖定則解鎖回 view
+          if (btn.dataset.m === "locked" && locked) {
+            setMode("view");
+          } else {
+            setMode(btn.dataset.m);
+          }
         });
       });
 
@@ -65,12 +70,7 @@
       });
 
       function setMode(m) {
-        if (m === "locked") {
-          locked = !locked;
-          m = locked ? "locked" : "view";
-        } else {
-          locked = false;
-        }
+        locked = (m === "locked");
         mode = m;
         document.body.className = m === "resize" ? "resizing" : (m === "locked" ? "locked" : "");
         if (win) win.setResizable(m === "resize");
