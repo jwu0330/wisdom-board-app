@@ -28,7 +28,7 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, _: LPARAM) -> BOOL {
 
 pub fn pin_to_desktop<R: Runtime>(window: &WebviewWindow<R>) {
     let tauri_hwnd = window.hwnd().unwrap().0 as isize;
-    let tauri_hwnd = HWND(tauri_hwnd as *mut _);
+    let tauri_hwnd = HWND(tauri_hwnd);
 
     unsafe {
         // 1. 找到 Progman
@@ -51,7 +51,7 @@ pub fn pin_to_desktop<R: Runtime>(window: &WebviewWindow<R>) {
         // 4. 掛載 Tauri 視窗到找到的 WorkerW 下，如果沒找到就退回掛在 Progman
         let worker_isize = WORKERW_HWND.load(Ordering::SeqCst);
         let target_hwnd = if worker_isize != 0 {
-            HWND(worker_isize as *mut _)
+            HWND(worker_isize)
         } else {
             progman
         };
