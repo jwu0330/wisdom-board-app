@@ -433,7 +433,8 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
                     }
                     let locked_labels: Vec<String> = {
                         let state = app.state::<crate::state::ManagedState>();
-                        match state.lock() {
+                        let guard = state.lock();
+                        match guard {
                             Ok(g) => g.panels.iter()
                                 .filter(|(_, cfg)| cfg.mode == "locked")
                                 .map(|(l, _)| l.clone())
