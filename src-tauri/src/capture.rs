@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// 嘗試從前景視窗取得瀏覽器 URL（透過 UI Automation）
 fn detect_browser_url() -> Option<String> {
     unsafe {
-        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, CoCreateInstance, CLSCTX_ALL, COINIT_MULTITHREADED};
+        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, CoCreateInstance, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
         use windows::Win32::UI::Accessibility::*;
 
         let fg = GetForegroundWindow();
@@ -26,8 +26,13 @@ fn detect_browser_url() -> Option<String> {
         let title = String::from_utf16_lossy(&title_buf[..len as usize]);
         println!("[WisdomBoard] 前景視窗標題: {}", title);
 
-        let com_ok = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
+        // CoInitializeEx 回傳：
+        //   Ok(())  = S_OK 或 S_FALSE（成功或已初始化），需配對呼叫 CoUninitialize
+        //   Err     = 模式衝突（RPC_E_CHANGED_MODE），不呼叫 CoUninitialize
+        // COM 初始化計數是每執行緒的引用計數，S_FALSE 也需要配對的 CoUninitialize。
+        let com_initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
 
+        // 若 COM 初始化失敗（模式衝突），仍嘗試呼叫 UIAutomation（可能已由主執行緒初始化）
         let result = (|| -> Option<String> {
             let uia: IUIAutomation = match CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL) {
                 Ok(u) => u,
@@ -91,7 +96,7 @@ fn detect_browser_url() -> Option<String> {
             found_url
         })();
 
-        if com_ok {
+        if com_initialized {
             CoUninitialize();
         }
         result
@@ -338,150 +343,134 @@ pub fn get_detected_url(app: AppHandle) -> Option<String> {
     guard.detected_url.clone()
 }
 
+/// overlay 關閉或 build 失敗時，恢復所有面板並重新套用 locked 模式
+fn restore_panels_after_overlay(app: &AppHandle) {
+    for (label, w) in app.webview_windows() {
+        if label != "overlay" && label != "main" {
+            let _ = w.show();
+        }
+    }
+    let locked_labels: Vec<String> = {
+        let state = app.state::<crate::state::ManagedState>();
+        let guard = state.lock();
+        match guard {
+            Ok(g) => g.panels.iter()
+                .filter(|(_, cfg)| cfg.mode == "locked")
+                .map(|(l, _)| l.clone())
+                .collect(),
+            Err(_) => vec![],
+        }
+    };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        for l in locked_labels {
+            let _ = crate::panel::set_panel_mode(app.clone(), l, "locked".into());
+        }
+    });
+}
+
 #[tauri::command]
 pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("overlay") {
-        let _ = win.close();
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-
-    let detected_url = detect_browser_url();
-    {
-        let state = app.state::<crate::state::ManagedState>();
-        if let Ok(mut guard) = state.lock() {
-            guard.detected_url = detected_url;
-            guard.screenshot_path = None;
-        };
-    }
-
-    // 截圖前隱藏所有 WisdomBoard 視窗，確保截到真正的桌面內容
-    let all_wins: Vec<_> = app.webview_windows().into_iter().collect();
-    for (_, win) in &all_wins {
-        // 如果有 WS_EX_TRANSPARENT（鎖定模式），先移除，否則 hide 可能不完全
-        if let Ok(raw) = win.hwnd() {
-            unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::*;
-                let hwnd = HWND(raw.0 as isize);
-                let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                if ex & WS_EX_TRANSPARENT.0 != 0 {
-                    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
-                }
-                let _ = ShowWindow(hwnd, SW_HIDE);
-            }
+    // 整個流程在獨立執行緒執行，避免阻塞 command handler
+    std::thread::spawn(move || {
+        if let Some(win) = app.get_webview_window("overlay") {
+            let _ = win.close();
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        let _ = win.hide();
-    }
-    // 等待視窗完全隱藏（包含 DWM 動畫）
-    std::thread::sleep(std::time::Duration::from_millis(600));
 
-    let screenshot_path = capture_screen_to_file()?;
+        let detected_url = detect_browser_url();
+        {
+            let state = app.state::<crate::state::ManagedState>();
+            if let Ok(mut guard) = state.lock() {
+                guard.detected_url = detected_url;
+                // 清理上一次的全域截圖暫存檔
+                if let Some(old_path) = guard.screenshot_path.take() {
+                    let _ = std::fs::remove_file(&old_path);
+                }
+            };
+        }
 
-    // 截圖完成後存入 state，供 overlay JS 的 get_screenshot invoke 使用
-    {
-        let state = app.state::<crate::state::ManagedState>();
-        if let Ok(mut guard) = state.lock() {
-            guard.screenshot_path = Some(screenshot_path.clone());
+        // 截圖前隱藏所有 WisdomBoard 視窗，確保截到真正的桌面內容
+        let all_wins: Vec<_> = app.webview_windows().into_iter().collect();
+        for (_, win) in &all_wins {
+            if let Ok(raw) = win.hwnd() {
+                unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::*;
+                    let hwnd = HWND(raw.0 as isize);
+                    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                    if ex & WS_EX_TRANSPARENT.0 != 0 {
+                        SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
+                    }
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+            }
+            let _ = win.hide();
+        }
+        // 等待視窗完全隱藏（包含 DWM 動畫）
+        std::thread::sleep(std::time::Duration::from_millis(600));
+
+        let screenshot_path = match capture_screen_to_file() {
+            Ok(p) => p,
+            Err(e) => {
+                println!("[WisdomBoard] 截圖失敗: {e}");
+                restore_panels_after_overlay(&app);
+                return;
+            }
         };
-    }
 
-    let scale = app.primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
+        {
+            let state = app.state::<crate::state::ManagedState>();
+            if let Ok(mut guard) = state.lock() {
+                guard.screenshot_path = Some(screenshot_path.clone());
+            };
+        }
 
-    let (screen_w, screen_h) = unsafe {
-        (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN))
-    };
+        let scale = app.primary_monitor()
+            .ok()
+            .flatten()
+            .map(|m| m.scale_factor())
+            .unwrap_or(1.0);
 
-    // 轉換為邏輯像素
-    let logical_w = screen_w as f64 / scale;
-    let logical_h = screen_h as f64 / scale;
+        let (screen_w, screen_h) = unsafe {
+            (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN))
+        };
 
-    println!("[WisdomBoard] 建立 overlay 視窗: {}x{} (scale={})", logical_w, logical_h, scale);
+        let logical_w = screen_w as f64 / scale;
+        let logical_h = screen_h as f64 / scale;
 
-    // 在獨立執行緒建立視窗，避免阻塞 command handler
-    std::thread::spawn({
-        let app = app.clone();
-        move || {
-            let url = tauri::WebviewUrl::App("src/overlay.html".into());
-            let builder = tauri::WebviewWindowBuilder::new(&app, "overlay", url)
-                .title("WisdomBoard - 框選區域 (按 ESC 或關閉視窗取消)")
-                .inner_size(logical_w, logical_h)
-                .position(0.0, 0.0)
-                .decorations(false)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .transparent(false)
-                .resizable(false);
+        println!("[WisdomBoard] 建立 overlay 視窗: {}x{} (scale={})", logical_w, logical_h, scale);
 
-            println!("[WisdomBoard] overlay builder 準備 build()...");
-            match builder.build() {
-                Ok(win) => {
-                    println!("[WisdomBoard] 框選 Overlay build() 成功");
-                    let _ = win.set_size(tauri::LogicalSize::new(logical_w, logical_h));
-                    let _ = win.set_position(tauri::LogicalPosition::new(0.0, 0.0));
-                    let _ = win.show();
-                    let _ = win.set_focus();
+        let url = tauri::WebviewUrl::App("src/overlay.html".into());
+        let builder = tauri::WebviewWindowBuilder::new(&app, "overlay", url)
+            .title("WisdomBoard - 框選區域 (按 ESC 或關閉視窗取消)")
+            .inner_size(logical_w, logical_h)
+            .position(0.0, 0.0)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .transparent(false)
+            .resizable(false);
 
-                    // overlay 關閉後恢復其他視窗 + 重新套用 locked 模式
-                    let app_close = app.clone();
-                    win.on_window_event(move |event| {
-                        if let tauri::WindowEvent::Destroyed = event {
-                            // 先 show 所有視窗（排除 main 和 overlay）
-                            for (label, w) in app_close.webview_windows() {
-                                if label != "overlay" && label != "main" {
-                                    let _ = w.show();
-                                }
-                            }
-                            // 重新套用 locked 面板的模式
-                            let locked_labels: Vec<String> = {
-                                let state = app_close.state::<crate::state::ManagedState>();
-                                let guard = state.lock();
-                                match guard {
-                                    Ok(g) => g.panels.iter()
-                                        .filter(|(_, cfg)| cfg.mode == "locked")
-                                        .map(|(l, _)| l.clone())
-                                        .collect(),
-                                    Err(_) => vec![],
-                                }
-                            };
-                            for l in locked_labels {
-                                let a = app_close.clone();
-                                std::thread::spawn(move || {
-                                    std::thread::sleep(std::time::Duration::from_millis(100));
-                                    let _ = crate::panel::set_panel_mode(a, l, "locked".into());
-                                });
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    println!("[WisdomBoard] overlay build() FAILED: {e}");
-                    for (label, w) in app.webview_windows() {
-                        if label != "overlay" && label != "main" {
-                            let _ = w.show();
-                        }
+        println!("[WisdomBoard] overlay builder 準備 build()...");
+        match builder.build() {
+            Ok(win) => {
+                println!("[WisdomBoard] 框選 Overlay build() 成功");
+                let _ = win.set_size(tauri::LogicalSize::new(logical_w, logical_h));
+                let _ = win.set_position(tauri::LogicalPosition::new(0.0, 0.0));
+                let _ = win.show();
+                let _ = win.set_focus();
+
+                let app_close = app.clone();
+                win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Destroyed = event {
+                        restore_panels_after_overlay(&app_close);
                     }
-                    let locked_labels: Vec<String> = {
-                        let state = app.state::<crate::state::ManagedState>();
-                        let guard = state.lock();
-                        match guard {
-                            Ok(g) => g.panels.iter()
-                                .filter(|(_, cfg)| cfg.mode == "locked")
-                                .map(|(l, _)| l.clone())
-                                .collect(),
-                            Err(_) => vec![],
-                        }
-                    };
-                    for l in locked_labels {
-                        let a = app.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            let _ = crate::panel::set_panel_mode(a, l, "locked".into());
-                        });
-                    }
-                }
+                });
+            }
+            Err(e) => {
+                println!("[WisdomBoard] overlay build() FAILED: {e}");
+                restore_panels_after_overlay(&app);
             }
         }
     });
@@ -515,54 +504,56 @@ pub fn capture_region(
         let _ = overlay_win.hide();
     }
 
-    // 等待一幀讓 overlay 真正消失
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    println!(
-        "[WisdomBoard] 擷取區域: ({}, {}) {}x{} (scale: {})",
-        phys_x, phys_y, phys_w, phys_h, scale
-    );
-
     let label = crate::panel::next_panel_id();
-
-    // 擷取螢幕區域為 BMP 檔案
-    let screenshot_path = capture_region_to_file(phys_x, phys_y, phys_w, phys_h, &label)?;
-
-    // 使用原始邏輯座標（避免 f64→i32→f64 精度損失）
     let logical_x = x;
     let logical_y = y;
     let logical_w = width;
     let logical_h = height;
 
-    // 先存入 state
-    {
-        let state = app.state::<ManagedState>();
-        if let Ok(mut guard) = state.lock() {
-            guard.panels.insert(
-                label.clone(),
-                PanelConfig {
-                    label: label.clone(),
-                    panel_type: PanelType::Capture,
-                    url: None,
-                    x: logical_x,
-                    y: logical_y,
-                    width: logical_w,
-                    height: logical_h,
-                    mode: "locked".into(),
-                    zoom: 1.0,
-                    target_hwnd: None,
-                    source_rect: None,
-                    screenshot_path: Some(screenshot_path.clone()),
-                },
-            );
-        };
-    }
-
+    // 截圖與建視窗移到獨立執行緒，避免阻塞 command handler
     std::thread::spawn({
         let app = app.clone();
         let label = label.clone();
-        let screenshot_path = screenshot_path.clone();
         move || {
+            // 等待一幀讓 overlay 真正消失
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            println!(
+                "[WisdomBoard] 擷取區域: ({}, {}) {}x{} (scale: {})",
+                phys_x, phys_y, phys_w, phys_h, scale
+            );
+
+            let screenshot_path = match capture_region_to_file(phys_x, phys_y, phys_w, phys_h, &label) {
+                Ok(p) => p,
+                Err(e) => {
+                    println!("[WisdomBoard] 區域截圖失敗: {e}");
+                    return;
+                }
+            };
+
+            {
+                let state = app.state::<ManagedState>();
+                if let Ok(mut guard) = state.lock() {
+                    guard.panels.insert(
+                        label.clone(),
+                        PanelConfig {
+                            label: label.clone(),
+                            panel_type: PanelType::Capture,
+                            url: None,
+                            x: logical_x,
+                            y: logical_y,
+                            width: logical_w,
+                            height: logical_h,
+                            mode: "locked".into(),
+                            zoom: 1.0,
+                            target_hwnd: None,
+                            source_rect: None,
+                            screenshot_path: Some(screenshot_path.clone()),
+                        },
+                    );
+                };
+            }
+
             let url = tauri::WebviewUrl::App("src/panel.html".into());
             let builder = tauri::WebviewWindowBuilder::new(&app, &label, url)
                 .title("WisdomBoard Capture".to_string())
@@ -576,7 +567,6 @@ pub fn capture_region(
             match builder.build() {
                 Ok(win) => {
                     crate::panel::set_square_corners(&win);
-                    // 延遲套用鎖定模式，確保 webview 就緒
                     {
                         let a = app.clone();
                         let l = label.clone();

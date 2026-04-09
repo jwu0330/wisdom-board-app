@@ -123,29 +123,6 @@
       }
       waitForTauri();
 
-      // 載入截圖
-      function loadScreenshot(path) {
-        if (!path) return;
-        var url;
-        if (window.__TAURI__ && window.__TAURI__.core.convertFileSrc) {
-          url = window.__TAURI__.core.convertFileSrc(path);
-        } else {
-          url = "asset://localhost/" + path.replace(/\\/g, "/").replace(/^\//, "");
-        }
-        imgEl.src = url;
-        imgEl.onload = function() {
-          imgEl.classList.remove("hidden");
-          placeholder.classList.add("hidden");
-        };
-        imgEl.onerror = function() {
-          var fileUrl = "file:///" + path.replace(/\\/g, "/");
-          imgEl.src = fileUrl;
-          imgEl.onerror = function() {
-            console.warn("[panel] 截圖載入失敗:", path);
-          };
-        };
-      }
-
       // 鎖定/解鎖 toggle 按鈕
       document.getElementById("btn-lock").addEventListener("click", function(){
         var newMode = (mode === "locked") ? "edit" : "locked";

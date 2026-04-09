@@ -22,6 +22,57 @@ pub fn set_square_corners(win: &tauri::WebviewWindow) {
     }
 }
 
+/// 鎖定視窗：置底 + WS_DISABLED + WS_EX_TRANSPARENT（遞迴所有子視窗）
+fn lock_window(hwnd: HWND) {
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        // 主視窗置底
+        let _ = SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        // 加上 WS_DISABLED 禁止所有輸入
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        SetWindowLongW(hwnd, GWL_STYLE, (style | WS_DISABLED.0) as i32);
+        // 加上 WS_EX_TRANSPARENT 讓滑鼠穿透
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TRANSPARENT.0) as i32);
+        // 遞迴禁用所有子視窗（WebView2 的 HWND）
+        let _ = EnumChildWindows(hwnd, Some(disable_child), windows::Win32::Foundation::LPARAM(0));
+    }
+}
+
+/// 解鎖視窗：移除 WS_DISABLED + WS_EX_TRANSPARENT（遞迴所有子視窗）
+fn unlock_window(hwnd: HWND) {
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        // 移除 WS_DISABLED
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        SetWindowLongW(hwnd, GWL_STYLE, (style & !WS_DISABLED.0) as i32);
+        // 移除 WS_EX_TRANSPARENT
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
+        // 遞迴啟用所有子視窗
+        let _ = EnumChildWindows(hwnd, Some(enable_child), windows::Win32::Foundation::LPARAM(0));
+    }
+}
+
+unsafe extern "system" fn disable_child(hwnd: HWND, _: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::BOOL {
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+    SetWindowLongW(hwnd, GWL_STYLE, (style | WS_DISABLED.0) as i32);
+    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TRANSPARENT.0) as i32);
+    windows::Win32::Foundation::BOOL(1) // 繼續列舉
+}
+
+unsafe extern "system" fn enable_child(hwnd: HWND, _: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::BOOL {
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+    SetWindowLongW(hwnd, GWL_STYLE, (style & !WS_DISABLED.0) as i32);
+    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
+    windows::Win32::Foundation::BOOL(1)
+}
+
 static PANEL_COUNT: AtomicU32 = AtomicU32::new(0);
 /// debounce：記錄上次 Resized 觸發 auto_save 的時間戳（毫秒）
 static LAST_RESIZE_SAVE: AtomicU64 = AtomicU64::new(0);
@@ -426,24 +477,19 @@ pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(),
     };
 
     // 三態模式：
-    // "edit"        → 置頂 + 可拖移調整 + 不可穿透
-    // "passthrough"  → 置頂 + 不可拖移 + 可穿透操作內容
-    // "locked"       → 置底 + 不可拖移 + 滑鼠穿透（都關 = 鎖定板子）
+    // "edit"        → 置頂 + 可拖移調整
+    // "passthrough"  → 置頂 + 可操作面板內容
+    // "locked"       → 置底 + 完全不可互動（WS_DISABLED + WS_EX_TRANSPARENT）
     match mode.as_str() {
         "edit" => {
+            if let Ok(raw) = window.hwnd() {
+                let hwnd = HWND(raw.0 as isize);
+                unlock_window(hwnd);
+            }
             let _ = window.set_always_on_top(true);
             let _ = window.set_resizable(true);
-            if let Ok(raw) = window.hwnd() {
-                unsafe {
-                    use windows::Win32::UI::WindowsAndMessaging::*;
-                    let hwnd = HWND(raw.0 as isize);
-                    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
-                }
-            }
             let _ = window.show();
             let _ = window.set_focus();
-            // URL 面板：注入全屏 drag overlay
             if is_url {
                 let _ = window.eval(
                     "(() => {\
@@ -459,20 +505,14 @@ pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(),
             }
         }
         "passthrough" => {
-            // 穿透：置頂 + 不可拖移 + 移除 WS_EX_TRANSPARENT（可操作面板內容）
+            if let Ok(raw) = window.hwnd() {
+                let hwnd = HWND(raw.0 as isize);
+                unlock_window(hwnd);
+            }
             let _ = window.set_always_on_top(true);
             let _ = window.set_resizable(false);
-            if let Ok(raw) = window.hwnd() {
-                unsafe {
-                    use windows::Win32::UI::WindowsAndMessaging::*;
-                    let hwnd = HWND(raw.0 as isize);
-                    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
-                }
-            }
             let _ = window.show();
             if is_url {
-                // 移除 drag overlay + 全螢幕填滿面板而非整個螢幕
                 let _ = window.eval(
                     "var d=document.getElementById('wb-drag-overlay'); if(d) d.style.display='none';\
                      if(!document.getElementById('wb-fs-fix')){\
@@ -484,18 +524,12 @@ pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(),
             }
         }
         _ => {
-            // locked（都關）：置底 + 滑鼠穿透
+            // locked（都關）：置底 + 完全禁止互動
             let _ = window.set_always_on_top(false);
             let _ = window.set_resizable(false);
             if let Ok(raw) = window.hwnd() {
-                unsafe {
-                    use windows::Win32::UI::WindowsAndMessaging::*;
-                    let hwnd = HWND(raw.0 as isize);
-                    let _ = SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TRANSPARENT.0) as i32);
-                }
+                let hwnd = HWND(raw.0 as isize);
+                lock_window(hwnd);
             }
             if is_url {
                 let _ = window.eval(

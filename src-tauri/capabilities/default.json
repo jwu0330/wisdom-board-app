@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for all windows",
-  "windows": ["*"],
+  "description": "Capability for trusted app windows (main, settings, overlay, capture panels)",
+  "windows": ["main", "settings", "overlay", "panel-*"],
   "permissions": [
     "core:default",
     "core:window:default",
