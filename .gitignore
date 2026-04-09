@@ -26,3 +26,4 @@ log_temp.txt
 *.njsproj
 *.sln
 *.sw?
+src-tauri/target-alt/

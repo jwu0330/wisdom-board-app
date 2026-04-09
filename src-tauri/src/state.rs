@@ -24,6 +24,9 @@ pub struct PanelConfig {
     pub target_hwnd: Option<isize>,
     /// 目標視窗中的擷取區域 [x, y, w, h]（物理像素）
     pub source_rect: Option<[i32; 4]>,
+    /// 擷取面板的截圖 BMP 檔案路徑
+    #[serde(default)]
+    pub screenshot_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,11 +73,11 @@ impl Default for AppConfig {
 pub struct AppState {
     pub panels: HashMap<String, PanelConfig>,
     pub hotkey: HotkeyConfig,
-    /// DWM thumbnail handles: panel label -> thumbnail id
-    pub dwm_thumbnails: HashMap<String, isize>,
     /// 快捷鍵監聽執行緒 ID（用於 PostThreadMessage）
     pub hotkey_thread_id: Option<u32>,
     pub autostart: bool,
+    /// 框選 overlay 用的截圖路徑（在 overlay 開啟前截好，overlay JS 讀取此值）
+    pub screenshot_path: Option<String>,
 }
 
 impl Default for AppState {
@@ -82,9 +85,9 @@ impl Default for AppState {
         Self {
             panels: HashMap::new(),
             hotkey: HotkeyConfig::default(),
-            dwm_thumbnails: HashMap::new(),
             hotkey_thread_id: None,
             autostart: true,
+            screenshot_path: None,
         }
     }
 }

@@ -1,6 +1,25 @@
 use crate::state::{ManagedState, PanelConfig, PanelType};
 use std::sync::atomic::{AtomicI32, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
+use windows::Win32::Foundation::HWND;
+
+/// 移除 Windows 11 視窗圓角
+pub fn set_square_corners(win: &tauri::WebviewWindow) {
+    if let Ok(raw) = win.hwnd() {
+        let hwnd = HWND(raw.0 as isize);
+        unsafe {
+            use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE};
+            // 直角（不修改 window style，避免 WebView 客戶區錯位）
+            let preference: u32 = 1; // DWMWCP_DONOTROUND
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &preference as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+        }
+    }
+}
 
 static PANEL_COUNT: AtomicI32 = AtomicI32::new(0);
 
@@ -11,6 +30,33 @@ pub fn next_panel_id() -> String {
         .as_millis() as u32;
     let seq = PANEL_COUNT.fetch_add(1, Ordering::SeqCst);
     format!("panel-{}-{}", ts % 100000, seq)
+}
+
+/// 關閉所有面板與 overlay，並儲存狀態
+#[tauri::command]
+pub fn close_all_panels(app: AppHandle) -> Result<(), String> {
+    // 關閉所有 panel- 視窗
+    let windows: Vec<_> = app.webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label.starts_with("panel-") || label == "overlay")
+        .collect();
+
+    for (label, win) in &windows {
+        let _ = win.close();
+        println!("[WisdomBoard] 關閉視窗: {}", label);
+    }
+
+    // 清空 state
+    {
+        let state = app.state::<ManagedState>();
+        if let Ok(mut guard) = state.lock() {
+            guard.panels.clear();
+        };
+    }
+
+    crate::persistence::auto_save(&app);
+    println!("[WisdomBoard] 全部面板已關閉");
+    Ok(())
 }
 
 #[tauri::command]
@@ -53,19 +99,6 @@ pub fn create_url_panel(app: AppHandle, url: String) -> Result<String, String> {
         .parse()
         .map_err(|e: url::ParseError| format!("網址格式錯誤: {e}"))?;
 
-    let target_url = url.clone();
-    let webview_url = tauri::WebviewUrl::App("src/webpanel.html".into());
-    let navigated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let safe_url_js = serde_json::to_string(&target_url)
-        .unwrap_or_else(|_| {
-            let escaped = target_url
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r");
-            format!("\"{}\"", escaped)
-        });
-
     // 先 insert 預佔 state
     {
         let state = app.state::<ManagedState>();
@@ -80,86 +113,223 @@ pub fn create_url_panel(app: AppHandle, url: String) -> Result<String, String> {
                     y: 0.0,
                     width: 800.0,
                     height: 600.0,
-                    mode: "view".into(),
+                    mode: "edit".into(),
                     zoom: 1.0,
                     target_hwnd: None,
                     source_rect: None,
+                    screenshot_path: None,
                 },
             );
         };
     }
 
-    let builder = tauri::WebviewWindowBuilder::new(&app, &label, webview_url)
-        .title(format!("WisdomBoard - {}", url))
-        .inner_size(800.0, 600.0)
-        .decorations(true)
-        .always_on_top(false)
-        .skip_taskbar(false)
-        .transparent(false)
-        .on_navigation(|_url| true)
-        .on_page_load({
-            let navigated = navigated.clone();
-            move |wv, payload| {
-                if let tauri::webview::PageLoadEvent::Finished = payload.event() {
-                    if !navigated.swap(true, Ordering::SeqCst) {
-                        let js = format!("window.location.href = {};", safe_url_js);
-                        let _ = wv.eval(&js);
-                    }
-                }
-            }
-        });
+    // 驗證 URL 格式（在 thread 外先驗證）
+    url.parse::<url::Url>().map_err(|e: url::ParseError| format!("網址格式錯誤: {e}"))?;
 
-    match builder.build() {
-        Ok(win) => {
-            let app_handle = app.clone();
-            let panel_label = label.clone();
-            win.on_window_event(move |event| {
-                match event {
-                    tauri::WindowEvent::Destroyed => {
-                        {
-                            let state = app_handle.state::<ManagedState>();
-                            if let Ok(mut guard) = state.lock() {
-                                guard.panels.remove(&panel_label);
-                            };
+    // 在獨立執行緒建立視窗，避免阻塞 command handler
+    std::thread::spawn({
+        let app = app.clone();
+        let label = label.clone();
+        let url = url.clone();
+        move || {
+            let parsed_url: url::Url = match url.parse() {
+                Ok(u) => u,
+                Err(e) => { println!("[WisdomBoard] URL parse error in thread: {e}"); return; }
+            };
+            let webview_url = tauri::WebviewUrl::External(parsed_url);
+            let builder = tauri::WebviewWindowBuilder::new(&app, &label, webview_url)
+                .title(format!("WisdomBoard - {}", url))
+                .inner_size(800.0, 600.0)
+                .decorations(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .transparent(false)
+                .on_navigation(|_url| true)
+                .initialization_script(
+                    // 注入頂部拖移條（8px）
+                    "(() => {\
+                       const d = document.createElement('div');\
+                       d.style.cssText = 'position:fixed;top:0;left:0;right:0;height:8px;z-index:99999;cursor:move;-webkit-app-region:drag;';\
+                       document.documentElement.appendChild(d);\
+                     })();"
+                );
+
+            match builder.build() {
+                Ok(win) => {
+                    set_square_corners(&win);
+                    let app_handle = app.clone();
+                    let panel_label = label.clone();
+                    win.on_window_event(move |event| {
+                        match event {
+                            tauri::WindowEvent::Destroyed => {
+                                {
+                                    let state = app_handle.state::<ManagedState>();
+                                    if let Ok(mut guard) = state.lock() {
+                                        guard.panels.remove(&panel_label);
+                                    };
+                                }
+                                crate::persistence::auto_save(&app_handle);
+                                let _ = app_handle.emit("panel-closed", &panel_label);
+                            }
+                            tauri::WindowEvent::Moved(pos) => {
+                                let state = app_handle.state::<ManagedState>();
+                                if let Ok(mut guard) = state.lock() {
+                                    if let Some(p) = guard.panels.get_mut(&panel_label) {
+                                        p.x = pos.x as f64;
+                                        p.y = pos.y as f64;
+                                    }
+                                };
+                            }
+                            tauri::WindowEvent::Resized(size) => {
+                                let state = app_handle.state::<ManagedState>();
+                                if let Ok(mut guard) = state.lock() {
+                                    if let Some(p) = guard.panels.get_mut(&panel_label) {
+                                        p.width = size.width as f64;
+                                        p.height = size.height as f64;
+                                    }
+                                };
+                            }
+                            _ => {}
                         }
-                        crate::persistence::auto_save(&app_handle);
-                        let _ = app_handle.emit("panel-closed", &panel_label);
-                    }
-                    tauri::WindowEvent::Moved(pos) => {
-                        let state = app_handle.state::<ManagedState>();
-                        if let Ok(mut guard) = state.lock() {
-                            if let Some(p) = guard.panels.get_mut(&panel_label) {
-                                p.x = pos.x as f64;
-                                p.y = pos.y as f64;
-                            }
-                        };
-                    }
-                    tauri::WindowEvent::Resized(size) => {
-                        let state = app_handle.state::<ManagedState>();
-                        if let Ok(mut guard) = state.lock() {
-                            if let Some(p) = guard.panels.get_mut(&panel_label) {
-                                p.width = size.width as f64;
-                                p.height = size.height as f64;
-                            }
-                        };
-                    }
-                    _ => {}
+                    });
+                    crate::persistence::auto_save(&app);
+                    println!("[WisdomBoard] URL 面板 {} 已建立: {}", label, url);
+                    let _ = app.emit("panel-created", serde_json::json!({
+                        "label": &label, "type": "url", "url": &url
+                    }));
                 }
-            });
-
-            crate::persistence::auto_save(&app);
-            println!("[WisdomBoard] URL 面板 {} 已建立: {}", label, url);
-            Ok(label)
-        }
-        Err(e) => {
-            // 建立失敗，移除預佔
-            let state = app.state::<ManagedState>();
-            if let Ok(mut guard) = state.lock() {
-                guard.panels.remove(&label);
+                Err(e) => {
+                    println!("[WisdomBoard] URL 面板 build() FAILED: {e}");
+                    let state = app.state::<ManagedState>();
+                    if let Ok(mut guard) = state.lock() {
+                        guard.panels.remove(&label);
+                    }
+                    let _ = app.emit("panel-create-failed", &label);
+                }
             }
-            Err(format!("{e}"))
         }
+    });
+
+    println!("[WisdomBoard] URL 面板 {} 建立中: {}", label, url);
+    Ok(label)
+}
+
+/// 在指定位置和大小建立 URL 面板（從 overlay 框選呼叫）
+#[tauri::command]
+pub fn create_url_panel_at(
+    app: AppHandle, url: String,
+    x: f64, y: f64, width: f64, height: f64,
+) -> Result<String, String> {
+    let label = next_panel_id();
+
+    let _parsed: url::Url = url
+        .parse()
+        .map_err(|e: url::ParseError| format!("網址格式錯誤: {e}"))?;
+
+    {
+        let state = app.state::<ManagedState>();
+        if let Ok(mut guard) = state.lock() {
+            guard.panels.insert(
+                label.clone(),
+                PanelConfig {
+                    label: label.clone(),
+                    panel_type: PanelType::Url,
+                    url: Some(url.clone()),
+                    x, y, width, height,
+                    mode: "edit".into(),
+                    zoom: 1.0,
+                    target_hwnd: None,
+                    source_rect: None,
+                    screenshot_path: None,
+                },
+            );
+        };
     }
+
+    std::thread::spawn({
+        let app = app.clone();
+        let label = label.clone();
+        let url = url.clone();
+        move || {
+            let parsed_url: url::Url = match url.parse() {
+                Ok(u) => u,
+                Err(e) => { println!("[WisdomBoard] URL parse error: {e}"); return; }
+            };
+            let webview_url = tauri::WebviewUrl::External(parsed_url);
+            let builder = tauri::WebviewWindowBuilder::new(&app, &label, webview_url)
+                .title(format!("WisdomBoard - {}", url))
+                .inner_size(width, height)
+                .position(x, y)
+                .decorations(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .transparent(false)
+                .on_navigation(|_url| true)
+                .initialization_script(
+                    "(() => {\
+                       const d = document.createElement('div');\
+                       d.style.cssText = 'position:fixed;top:0;left:0;right:0;height:8px;z-index:99999;cursor:move;-webkit-app-region:drag;';\
+                       document.documentElement.appendChild(d);\
+                     })();"
+                );
+
+            match builder.build() {
+                Ok(win) => {
+                    set_square_corners(&win);
+                    let app_handle = app.clone();
+                    let panel_label = label.clone();
+                    win.on_window_event(move |event| {
+                        match event {
+                            tauri::WindowEvent::Destroyed => {
+                                {
+                                    let state = app_handle.state::<ManagedState>();
+                                    if let Ok(mut guard) = state.lock() {
+                                        guard.panels.remove(&panel_label);
+                                    };
+                                }
+                                crate::persistence::auto_save(&app_handle);
+                                let _ = app_handle.emit("panel-closed", &panel_label);
+                            }
+                            tauri::WindowEvent::Moved(pos) => {
+                                let state = app_handle.state::<ManagedState>();
+                                if let Ok(mut guard) = state.lock() {
+                                    if let Some(p) = guard.panels.get_mut(&panel_label) {
+                                        p.x = pos.x as f64;
+                                        p.y = pos.y as f64;
+                                    }
+                                };
+                            }
+                            tauri::WindowEvent::Resized(size) => {
+                                let state = app_handle.state::<ManagedState>();
+                                if let Ok(mut guard) = state.lock() {
+                                    if let Some(p) = guard.panels.get_mut(&panel_label) {
+                                        p.width = size.width as f64;
+                                        p.height = size.height as f64;
+                                    }
+                                };
+                            }
+                            _ => {}
+                        }
+                    });
+                    crate::persistence::auto_save(&app);
+                    println!("[WisdomBoard] URL 面板 {} 已建立 (框選): {} @ ({},{}) {}x{}",
+                        label, url, x, y, width, height);
+                    let _ = app.emit("panel-created", serde_json::json!({
+                        "label": &label, "type": "url", "url": &url, "mode": "edit"
+                    }));
+                }
+                Err(e) => {
+                    println!("[WisdomBoard] URL 面板 build() FAILED: {e}");
+                    let state = app.state::<ManagedState>();
+                    if let Ok(mut guard) = state.lock() {
+                        guard.panels.remove(&label);
+                    };
+                }
+            }
+        }
+    });
+
+    Ok(label)
 }
 
 #[tauri::command]
@@ -184,50 +354,61 @@ pub fn create_panel(app: AppHandle) -> Result<String, String> {
                     zoom: 1.0,
                     target_hwnd: None,
                     source_rect: None,
+                    screenshot_path: None,
                 },
             );
         };
     }
 
-    let url = tauri::WebviewUrl::App("src/panel.html".into());
-    let builder = tauri::WebviewWindowBuilder::new(&app, &label, url)
-        .title("WisdomBoard Panel".to_string())
-        .inner_size(400.0, 300.0)
-        .decorations(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .transparent(false);
+    std::thread::spawn({
+        let app = app.clone();
+        let label = label.clone();
+        move || {
+            let url = tauri::WebviewUrl::App("src/panel.html".into());
+            let builder = tauri::WebviewWindowBuilder::new(&app, &label, url)
+                .title("WisdomBoard Panel".to_string())
+                .inner_size(400.0, 300.0)
+                .decorations(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .transparent(false);
 
-    match builder.build() {
-        Ok(win) => {
-            let app_handle = app.clone();
-            let panel_label = label.clone();
-            win.on_window_event(move |event| {
-                if let tauri::WindowEvent::Destroyed = event {
-                    {
-                        let state = app_handle.state::<ManagedState>();
-                        if let Ok(mut guard) = state.lock() {
-                            guard.panels.remove(&panel_label);
-                        };
-                    }
-                    crate::persistence::auto_save(&app_handle);
-                    let _ = app_handle.emit("panel-closed", &panel_label);
+            match builder.build() {
+                Ok(win) => {
+                    set_square_corners(&win);
+                    let app_handle = app.clone();
+                    let panel_label = label.clone();
+                    win.on_window_event(move |event| {
+                        if let tauri::WindowEvent::Destroyed = event {
+                            {
+                                let state = app_handle.state::<ManagedState>();
+                                if let Ok(mut guard) = state.lock() {
+                                    guard.panels.remove(&panel_label);
+                                };
+                            }
+                            crate::persistence::auto_save(&app_handle);
+                            let _ = app_handle.emit("panel-closed", &panel_label);
+                        }
+                    });
+                    crate::persistence::auto_save(&app);
+                    println!("[WisdomBoard] 面板 {} 已建立", label);
+                    let _ = app.emit("panel-created", serde_json::json!({
+                        "label": &label, "type": "capture", "url": null
+                    }));
                 }
-            });
-
-            crate::persistence::auto_save(&app);
-            println!("[WisdomBoard] 面板 {} 已建立", label);
-            Ok(label)
-        }
-        Err(e) => {
-            // 建立失敗，移除預佔
-            let state = app.state::<ManagedState>();
-            if let Ok(mut guard) = state.lock() {
-                guard.panels.remove(&label);
+                Err(e) => {
+                    println!("[WisdomBoard] 面板 build() FAILED: {e}");
+                    let state = app.state::<ManagedState>();
+                    if let Ok(mut guard) = state.lock() {
+                        guard.panels.remove(&label);
+                    };
+                }
             }
-            Err(format!("{e}"))
         }
-    }
+    });
+
+    println!("[WisdomBoard] 面板 {} 建立中", label);
+    Ok(label)
 }
 
 #[tauri::command]
@@ -236,7 +417,39 @@ pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(),
         .get_webview_window(&label)
         .ok_or_else(|| format!("找不到面板: {}", label))?;
     let _ = app.emit_to(&label, "mode-changed", &mode);
-    let _ = window.set_resizable(mode == "resize");
+
+    if mode == "locked" {
+        // 鎖定：置底 + 不可調整 + 忽略滑鼠（WS_EX_TRANSPARENT 讓點擊穿透）
+        let _ = window.set_always_on_top(false);
+        let _ = window.set_resizable(false);
+        if let Ok(raw) = window.hwnd() {
+            let hwnd = HWND(raw.0 as isize);
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::*;
+                // 置底
+                let _ = SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                // 加上 WS_EX_TRANSPARENT 讓滑鼠點擊穿透（不會被激活到前面）
+                let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TRANSPARENT.0) as i32);
+            }
+        }
+    } else {
+        // 編輯：置頂 + 可拖移可調整 + 可操作
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_resizable(true);
+        if let Ok(raw) = window.hwnd() {
+            let hwnd = HWND(raw.0 as isize);
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::*;
+                // 移除 WS_EX_TRANSPARENT
+                let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
+            }
+        }
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 
     {
         let state = app.state::<ManagedState>();
@@ -280,6 +493,13 @@ pub fn set_panel_zoom(app: AppHandle, label: String, zoom: f64) -> Result<(), St
 }
 
 #[tauri::command]
+pub fn get_panel_screenshot(app: AppHandle, label: String) -> Option<String> {
+    let state = app.state::<ManagedState>();
+    let guard = state.lock().ok()?;
+    guard.panels.get(&label)?.screenshot_path.clone()
+}
+
+#[tauri::command]
 pub fn close_panel(app: AppHandle, label: String) -> Result<(), String> {
     let window = app
         .get_webview_window(&label)
@@ -298,28 +518,13 @@ pub fn focus_panel(app: AppHandle, label: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn set_mode(app: AppHandle, mode: String) -> Result<(), String> {
-    for (label, window) in app.webview_windows() {
-        if label.starts_with("panel-") {
-            let _ = window.emit("mode-changed", &mode);
-        }
+    let labels: Vec<String> = app.webview_windows()
+        .into_keys()
+        .filter(|l| l.starts_with("panel-"))
+        .collect();
+    for label in labels {
+        let _ = set_panel_mode(app.clone(), label, mode.clone());
     }
-
-    {
-        let state = app.state::<ManagedState>();
-        if let Ok(mut guard) = state.lock() {
-            // 只更新仍存在的面板
-            let existing_labels: Vec<String> = app.webview_windows()
-                .into_keys()
-                .filter(|l| l.starts_with("panel-"))
-                .collect();
-            for label in &existing_labels {
-                if let Some(p) = guard.panels.get_mut(label) {
-                    p.mode = mode.clone();
-                }
-            }
-        };
-    }
-    crate::persistence::auto_save(&app);
     Ok(())
 }
 
@@ -346,18 +551,8 @@ pub fn restore_panels(app: &AppHandle, configs: Vec<PanelConfig>) {
 
 fn restore_url_panel(app: &AppHandle, config: &PanelConfig, url: &str) -> Result<String, String> {
     let label = config.label.clone(); // 使用原始 label 而非 next_panel_id()
-    let target_url = url.to_string();
-    let webview_url = tauri::WebviewUrl::App("src/webpanel.html".into());
-    let navigated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let safe_url_js = serde_json::to_string(&target_url)
-        .unwrap_or_else(|_| {
-            let escaped = target_url
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r");
-            format!("\"{}\"", escaped)
-        });
+    let parsed_url: url::Url = url.parse().map_err(|e: url::ParseError| format!("URL 解析失敗: {e}"))?;
+    let webview_url = tauri::WebviewUrl::External(parsed_url);
 
     let builder = tauri::WebviewWindowBuilder::new(app, &label, webview_url)
         .title(format!("WisdomBoard - {}", url))
@@ -367,18 +562,7 @@ fn restore_url_panel(app: &AppHandle, config: &PanelConfig, url: &str) -> Result
         .always_on_top(false)
         .skip_taskbar(false)
         .transparent(false)
-        .on_navigation(|_url| true)
-        .on_page_load({
-            let navigated = navigated.clone();
-            move |wv, payload| {
-                if let tauri::webview::PageLoadEvent::Finished = payload.event() {
-                    if !navigated.swap(true, Ordering::SeqCst) {
-                        let js = format!("window.location.href = {};", safe_url_js);
-                        let _ = wv.eval(&js);
-                    }
-                }
-            }
-        });
+        .on_navigation(|_url| true);
 
     let win = builder.build().map_err(|e| format!("{e}"))?;
 
@@ -445,23 +629,7 @@ fn restore_capture_panel(app: &AppHandle, config: &PanelConfig) -> Result<String
         .transparent(false);
 
     let win = builder.build().map_err(|e| format!("{e}"))?;
-
-    // 嘗試重新註冊 DWM thumbnail（目標視窗可能已關閉）
-    if let Some(thwnd) = config.target_hwnd {
-        use windows::Win32::Foundation::HWND;
-        let target = HWND(thwnd);
-        // 檢查目標視窗是否仍存在
-        let is_valid = unsafe {
-            windows::Win32::UI::WindowsAndMessaging::IsWindow(target).as_bool()
-        };
-        if is_valid {
-            crate::capture::register_dwm_thumbnail_pub(
-                app, &label, &win, target,
-                config.width as i32, config.height as i32,
-                config.source_rect.as_ref(),
-            );
-        }
-    }
+    set_square_corners(&win);
 
     {
         let state = app.state::<ManagedState>();
@@ -482,11 +650,6 @@ fn restore_capture_panel(app: &AppHandle, config: &PanelConfig) -> Result<String
                     let state = app_handle.state::<ManagedState>();
                     if let Ok(mut guard) = state.lock() {
                         guard.panels.remove(&panel_label);
-                        if let Some(thumb_id) = guard.dwm_thumbnails.remove(&panel_label) {
-                            unsafe {
-                                let _ = windows::Win32::Graphics::Dwm::DwmUnregisterThumbnail(thumb_id);
-                            }
-                        }
                     };
                 }
                 crate::persistence::auto_save(&app_handle);
@@ -507,19 +670,6 @@ fn restore_capture_panel(app: &AppHandle, config: &PanelConfig) -> Result<String
                     if let Some(p) = guard.panels.get_mut(&panel_label) {
                         p.width = size.width as f64;
                         p.height = size.height as f64;
-                    }
-                    if let Some(&thumb_id) = guard.dwm_thumbnails.get(&panel_label) {
-                        unsafe {
-                            let mut props: windows::Win32::Graphics::Dwm::DWM_THUMBNAIL_PROPERTIES = std::mem::zeroed();
-                            // DWM_TNP_RECTDESTINATION = 0x01
-                            props.dwFlags = 0x01_u32;
-                            props.rcDestination = windows::Win32::Foundation::RECT {
-                                left: 0, top: 0,
-                                right: size.width as i32,
-                                bottom: size.height as i32,
-                            };
-                            let _ = windows::Win32::Graphics::Dwm::DwmUpdateThumbnailProperties(thumb_id, &props);
-                        }
                     }
                 };
             }

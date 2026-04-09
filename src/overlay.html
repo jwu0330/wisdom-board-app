@@ -7,7 +7,7 @@
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100vw; height: 100vh; overflow: hidden; }
       body {
-        background: #000;
+        background: rgba(0,0,0,0.01);
         cursor: crosshair;
         user-select: none;
         font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
@@ -36,11 +36,51 @@
       }
       #sz {
         position: fixed;
-        background: rgba(0,0,0,0.8); color: #89b4fa;
-        padding: 3px 8px;
-        font-size: 11px; font-family: monospace;
+        background: rgba(0,0,0,0.85); color: #fff;
+        padding: 5px 12px;
+        font-size: 15px; font-family: monospace; font-weight: bold;
+        border: 1px solid #89b4fa;
         display: none; pointer-events: none; z-index: 20;
       }
+      /* 框選完成後的選擇面板 */
+      #action-panel {
+        display: none;
+        position: fixed;
+        z-index: 50;
+        background: #fff;
+        border: 1px solid #ddd;
+        padding: 12px 16px;
+        min-width: 320px;
+        font-size: 13px;
+        color: #111;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+      }
+      #action-panel .title {
+        font-weight: 700; font-size: 14px; margin-bottom: 10px;
+        display: flex; justify-content: space-between; align-items: center;
+      }
+      #action-panel .title button {
+        background: none; border: none; color: #999; cursor: pointer; font-size: 14px;
+      }
+      #action-panel .opt {
+        padding: 10px; border: 1px solid #eee; margin-bottom: 6px; cursor: pointer;
+      }
+      #action-panel .opt:hover { border-color: #111; }
+      #action-panel .opt b { font-size: 12px; display: block; margin-bottom: 2px; }
+      #action-panel .opt small { font-size: 10px; color: #999; }
+      #url-row { display: none; margin-top: 8px; }
+      #url-row input {
+        width: 100%; padding: 8px 10px; border: 1px solid #ddd;
+        font-size: 12px; outline: none; font-family: inherit;
+      }
+      #url-row input:focus { border-color: #111; }
+      #url-row .btns { display: flex; gap: 6px; margin-top: 8px; }
+      #url-row .btns button {
+        padding: 6px 14px; border: 1px solid #ddd; font-size: 11px;
+        cursor: pointer; font-family: inherit; background: #fff;
+      }
+      #url-row .btn-p { background: #111; color: #fff; border-color: #111; }
+      #url-row .btn-p:hover { background: #333; }
     </style>
   </head>
   <body>
@@ -48,24 +88,44 @@
     <div id="hint">正在載入螢幕截圖...<small>按 ESC 取消</small></div>
     <div id="sel"></div>
     <div id="sz"></div>
+
+    <div id="action-panel">
+      <div class="title"><span>選擇面板類型</span><button id="ap-close">&#x2715;</button></div>
+      <div class="opt" id="opt-url"><b>網頁面板（可互動）</b><small>輸入 URL，可操作網頁內容</small></div>
+      <div class="opt" id="opt-cap"><b>截圖面板（靜態）</b><small>擷取螢幕畫面為靜態圖片</small></div>
+      <div id="url-row">
+        <input id="url-input" placeholder="https://www.youtube.com/watch?v=..." />
+        <div class="btns">
+          <button class="btn-p" id="url-go">建立</button>
+          <button id="url-back">返回</button>
+        </div>
+      </div>
+    </div>
+
     <script>
       (function() {
         var bg = document.getElementById("bg");
         var hint = document.getElementById("hint");
         var sel = document.getElementById("sel");
         var sz = document.getElementById("sz");
+        var ap = document.getElementById("action-panel");
         var dragging = false, sx = 0, sy = 0;
         var ready = false;
+        var selectedRect = null; // 框選結果
 
-        // 等待 Rust 注入 __SCREENSHOT_PATH__，最多等 10 秒（#58）
+        // 載入截圖背景
         var waitCount = 0;
-        function waitForPath() {
-          if (window.__SCREENSHOT_PATH__) {
-            loadScreenshot(window.__SCREENSHOT_PATH__);
-          } else if (waitCount++ < 100) {
-            setTimeout(waitForPath, 100);
+        function waitForTauri() {
+          if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+            window.__TAURI__.core.invoke("get_screenshot").then(function(path) {
+              loadScreenshot(path);
+            }).catch(function(err) {
+              hint.innerHTML = "截圖取得失敗：" + err + "<small>按 ESC 取消</small>";
+            });
+          } else if (waitCount++ < 50) {
+            setTimeout(waitForTauri, 100);
           } else {
-            hint.innerHTML = "截圖載入超時<small>按 ESC 取消</small>";
+            hint.innerHTML = "初始化失敗<small>按 ESC 取消</small>";
           }
         }
 
@@ -78,9 +138,7 @@
               hint.innerHTML = "拖拉滑鼠框選要擷取的區域<small>按 ESC 取消</small>";
               ready = true;
             };
-            img.onerror = function() {
-              tryFileProtocol(filePath);
-            };
+            img.onerror = function() { tryFileProtocol(filePath); };
             img.src = assetUrl;
           } else {
             tryFileProtocol(filePath);
@@ -101,18 +159,22 @@
           img.src = fileUrl;
         }
 
-        waitForPath();
+        waitForTauri();
 
+        // ESC 取消
         document.addEventListener("keydown", function(e) {
           if (e.key === "Escape") {
-            if (window.__TAURI__) {
+            if (ap.style.display === "block") {
+              resetSelection();
+            } else if (window.__TAURI__) {
               window.__TAURI__.window.getCurrentWindow().close();
             }
           }
         });
 
+        // 框選
         document.addEventListener("mousedown", function(e) {
-          if (!ready) return;
+          if (!ready || ap.style.display === "block") return;
           dragging = true;
           sx = e.clientX; sy = e.clientY;
           hint.style.display = "none";
@@ -138,19 +200,88 @@
             return;
           }
 
-          if (window.__TAURI__) {
-            window.__TAURI__.core.invoke("capture_region", {
-              x: r.x, y: r.y, width: r.w, height: r.h
-            }).then(function() {
-              window.__TAURI__.window.getCurrentWindow().close();
-            }).catch(function(err) {
-              hint.style.display = "block";
-              hint.innerHTML = "擷取失敗：" + err + "<small>按 ESC 取消</small>";
-              sel.style.display = "none";
-              sz.style.display = "none";
-            });
-          }
+          // 記住框選結果，顯示選擇面板
+          selectedRect = r;
+          showActionPanel(r);
         });
+
+        function showActionPanel(r) {
+          // 定位在框選區域右下方
+          var px = r.x + r.w + 10;
+          var py = r.y + r.h + 10;
+          // 防止超出螢幕
+          if (px + 340 > window.innerWidth) px = r.x - 350;
+          if (py + 200 > window.innerHeight) py = r.y - 210;
+          if (px < 10) px = 10;
+          if (py < 10) py = 10;
+          ap.style.left = px + "px";
+          ap.style.top = py + "px";
+          ap.style.display = "block";
+          document.getElementById("url-row").style.display = "none";
+        }
+
+        function resetSelection() {
+          ap.style.display = "none";
+          selectedRect = null;
+          sel.style.display = "none";
+          sz.style.display = "none";
+          hint.style.display = "block";
+          hint.innerHTML = "拖拉滑鼠框選要擷取的區域<small>按 ESC 取消</small>";
+        }
+
+        // 關閉選擇面板
+        document.getElementById("ap-close").onclick = resetSelection;
+
+        // 選擇「截圖面板」
+        document.getElementById("opt-cap").onclick = function() {
+          if (!selectedRect || !window.__TAURI__) return;
+          var r = selectedRect;
+          ap.style.display = "none";
+          window.__TAURI__.core.invoke("capture_region", {
+            x: r.x, y: r.y, width: r.w, height: r.h
+          }).then(function() {
+            window.__TAURI__.window.getCurrentWindow().close();
+          }).catch(function(err) {
+            hint.style.display = "block";
+            hint.innerHTML = "擷取失敗：" + err + "<small>按 ESC 取消</small>";
+            sel.style.display = "none";
+            sz.style.display = "none";
+          });
+        };
+
+        // 選擇「網頁面板」→ 顯示 URL 輸入
+        document.getElementById("opt-url").onclick = function() {
+          document.getElementById("url-row").style.display = "block";
+          document.getElementById("url-input").focus();
+        };
+
+        // URL 建立
+        document.getElementById("url-go").onclick = doCreateUrl;
+        document.getElementById("url-input").onkeydown = function(e) {
+          if (e.key === "Enter") doCreateUrl();
+        };
+        document.getElementById("url-back").onclick = function() {
+          document.getElementById("url-row").style.display = "none";
+          document.getElementById("url-input").value = "";
+        };
+
+        function doCreateUrl() {
+          var url = document.getElementById("url-input").value.trim();
+          if (!url) return;
+          if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+          if (!selectedRect || !window.__TAURI__) return;
+          var r = selectedRect;
+          ap.style.display = "none";
+
+          window.__TAURI__.core.invoke("create_url_panel_at", {
+            url: url, x: r.x, y: r.y, width: r.w, height: r.h
+          }).then(function() {
+            window.__TAURI__.window.getCurrentWindow().close();
+          }).catch(function(err) {
+            hint.style.display = "block";
+            hint.innerHTML = "建立失敗：" + err + "<small>按 ESC 取消</small>";
+          });
+        }
 
         function rect(cx, cy) {
           return {
