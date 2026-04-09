@@ -173,13 +173,37 @@
             return;
           }
 
-          // 記住框選結果，顯示選擇面板
+          // 記住框選結果
           selectedRect = r;
-          showActionPanel(r);
+
+          // 偵測到 URL → 直接建立 URL 面板，不顯示選單
+          if (window.__TAURI__) {
+            window.__TAURI__.core.invoke("get_detected_url").then(function(url) {
+              if (url && selectedRect) {
+                // 自動建立
+                window.__TAURI__.core.invoke("create_url_panel_at", {
+                  url: url, x: r.x, y: r.y, width: r.w, height: r.h
+                }).then(function() {
+                  window.__TAURI__.window.getCurrentWindow().close();
+                }).catch(function(err) {
+                  hint.style.display = "block";
+                  hint.innerHTML = "建立失敗：" + err + "<small>按 ESC 取消</small>";
+                  sel.style.display = "none";
+                  sz.style.display = "none";
+                });
+              } else {
+                // 沒偵測到 URL → 顯示選單讓使用者選擇
+                showActionPanel(r);
+              }
+            }).catch(function() {
+              showActionPanel(r);
+            });
+          } else {
+            showActionPanel(r);
+          }
         });
 
         function showActionPanel(r) {
-          // 定位在框選區域右下方
           var px = r.x + r.w + 10;
           var py = r.y + r.h + 10;
           if (px + 340 > window.innerWidth) px = r.x - 350;
@@ -190,19 +214,7 @@
           ap.style.top = py + "px";
           ap.style.display = "block";
           document.getElementById("url-row").style.display = "none";
-
-          // 自動取得偵測到的 URL
-          if (window.__TAURI__) {
-            window.__TAURI__.core.invoke("get_detected_url").then(function(url) {
-              if (url) {
-                document.getElementById("url-input").value = url;
-                // 有偵測到 URL，直接展開 URL 輸入區域
-                document.getElementById("url-row").style.display = "block";
-                document.getElementById("detected-hint").style.display = "block";
-                document.getElementById("detected-hint").textContent = "已自動偵測網址";
-              }
-            }).catch(function(){});
-          }
+          document.getElementById("detected-hint").style.display = "none";
         }
 
         function resetSelection() {

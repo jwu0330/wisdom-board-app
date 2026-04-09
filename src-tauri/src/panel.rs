@@ -488,21 +488,20 @@ pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(),
             }
         }
         "passthrough" => {
+            // 穿透：可操作內容，但不置頂、不可調整大小
             if let Ok(raw) = window.hwnd() {
                 let hwnd = HWND(raw.0 as isize);
                 unlock_window(hwnd);
             }
-            let _ = window.set_always_on_top(true);
+            let _ = window.set_always_on_top(false);
             let _ = window.set_resizable(false);
             let _ = window.show();
             if is_url {
+                // 移除 drag overlay + 阻止 fullscreen API（影片只能在面板內放大）
                 let _ = window.eval(
                     "var d=document.getElementById('wb-drag-overlay'); if(d) d.style.display='none';\
-                     if(!document.getElementById('wb-fs-fix')){\
-                       var s=document.createElement('style'); s.id='wb-fs-fix';\
-                       s.textContent=':fullscreen{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;}';\
-                       document.head.appendChild(s);\
-                     }"
+                     Element.prototype.requestFullscreen=function(){return Promise.resolve();};\
+                     document.exitFullscreen=function(){return Promise.resolve();};"
                 );
             }
         }
