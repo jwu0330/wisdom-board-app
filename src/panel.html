@@ -97,8 +97,14 @@
           invoke = window.__TAURI__.core.invoke;
           panelLabel = win ? win.label : "";
           if (invoke && panelLabel) {
-            invoke("get_panel_screenshot", { label: panelLabel }).then(function(path) {
-              if (path) loadScreenshot(path);
+            invoke("get_panel_screenshot_base64", { label: panelLabel }).then(function(dataUrl) {
+              if (dataUrl) {
+                imgEl.src = dataUrl;
+                imgEl.onload = function() {
+                  imgEl.classList.remove("hidden");
+                  placeholder.classList.add("hidden");
+                };
+              }
             }).catch(function(){});
           }
           window.__TAURI__.event.listen("mode-changed", function(ev){

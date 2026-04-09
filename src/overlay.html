@@ -114,12 +114,14 @@
         var ready = false;
         var selectedRect = null; // 框選結果
 
-        // 載入截圖背景
+        // 載入截圖背景（使用 base64，解決 release build asset:// 問題）
         var waitCount = 0;
         function waitForTauri() {
           if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-            window.__TAURI__.core.invoke("get_screenshot").then(function(path) {
-              loadScreenshot(path);
+            window.__TAURI__.core.invoke("get_screenshot_base64").then(function(dataUrl) {
+              bg.style.backgroundImage = "url(" + dataUrl + ")";
+              hint.innerHTML = "拖拉滑鼠框選要擷取的區域<small>按 ESC 取消</small>";
+              ready = true;
             }).catch(function(err) {
               hint.innerHTML = "截圖取得失敗：" + err + "<small>按 ESC 取消</small>";
             });
@@ -128,36 +130,6 @@
           } else {
             hint.innerHTML = "初始化失敗<small>按 ESC 取消</small>";
           }
-        }
-
-        function loadScreenshot(filePath) {
-          if (window.__TAURI__ && window.__TAURI__.core.convertFileSrc) {
-            var assetUrl = window.__TAURI__.core.convertFileSrc(filePath);
-            var img = new Image();
-            img.onload = function() {
-              bg.style.backgroundImage = "url(" + assetUrl + ")";
-              hint.innerHTML = "拖拉滑鼠框選要擷取的區域<small>按 ESC 取消</small>";
-              ready = true;
-            };
-            img.onerror = function() { tryFileProtocol(filePath); };
-            img.src = assetUrl;
-          } else {
-            tryFileProtocol(filePath);
-          }
-        }
-
-        function tryFileProtocol(filePath) {
-          var fileUrl = "file:///" + filePath.replace(/\\/g, "/");
-          var img = new Image();
-          img.onload = function() {
-            bg.style.backgroundImage = "url(" + fileUrl + ")";
-            hint.innerHTML = "拖拉滑鼠框選要擷取的區域<small>按 ESC 取消</small>";
-            ready = true;
-          };
-          img.onerror = function() {
-            hint.innerHTML = "截圖載入失敗<small>按 ESC 取消</small>";
-          };
-          img.src = fileUrl;
         }
 
         waitForTauri();
@@ -303,10 +275,12 @@
         }
 
         function rect(cx, cy) {
-          return {
-            x: Math.min(sx, cx), y: Math.min(sy, cy),
-            w: Math.abs(cx - sx), h: Math.abs(cy - sy)
-          };
+          // 限制在螢幕範圍內
+          var x1 = Math.max(0, Math.min(sx, cx));
+          var y1 = Math.max(0, Math.min(sy, cy));
+          var x2 = Math.min(window.innerWidth, Math.max(sx, cx));
+          var y2 = Math.min(window.innerHeight, Math.max(sy, cy));
+          return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
         }
 
         function upd(cx, cy) {

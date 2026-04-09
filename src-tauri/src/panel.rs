@@ -387,54 +387,78 @@ pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(),
             .unwrap_or(false)
     };
 
-    if mode == "locked" {
-        // 鎖定：置底 + 不可調整 + 忽略滑鼠（WS_EX_TRANSPARENT 讓點擊穿透）
-        let _ = window.set_always_on_top(false);
-        let _ = window.set_resizable(false);
-        if let Ok(raw) = window.hwnd() {
-            let hwnd = HWND(raw.0 as isize);
-            unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::*;
-                let _ = SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TRANSPARENT.0) as i32);
+    // 三態模式：
+    // "edit"        → 置頂 + 可拖移調整 + 不可穿透
+    // "passthrough"  → 置頂 + 不可拖移 + 可穿透操作內容
+    // "locked"       → 置底 + 不可拖移 + 滑鼠穿透（都關 = 鎖定板子）
+    match mode.as_str() {
+        "edit" => {
+            let _ = window.set_always_on_top(true);
+            let _ = window.set_resizable(true);
+            if let Ok(raw) = window.hwnd() {
+                unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::*;
+                    let hwnd = HWND(raw.0 as isize);
+                    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
+                }
+            }
+            let _ = window.show();
+            let _ = window.set_focus();
+            // URL 面板：注入全屏 drag overlay
+            if is_url {
+                let _ = window.eval(
+                    "(() => {\
+                       var d = document.getElementById('wb-drag-overlay');\
+                       if (!d) {\
+                         d = document.createElement('div');\
+                         d.id = 'wb-drag-overlay';\
+                         d.style.cssText = 'position:fixed;inset:0;z-index:99999;cursor:move;-webkit-app-region:drag;background:rgba(137,180,250,0.08);';\
+                         document.documentElement.appendChild(d);\
+                       } else { d.style.display = 'block'; }\
+                     })();"
+                );
             }
         }
-        // URL 面板：移除 drag overlay
-        if is_url {
-            let _ = window.eval(
-                "var d=document.getElementById('wb-drag-overlay'); if(d) d.style.display='none';"
-            );
-        }
-    } else {
-        // 編輯：置頂 + 可拖移可調整
-        let _ = window.set_always_on_top(true);
-        let _ = window.set_resizable(true);
-        if let Ok(raw) = window.hwnd() {
-            let hwnd = HWND(raw.0 as isize);
-            unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::*;
-                let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
+        "passthrough" => {
+            // 穿透：置頂 + 不可拖移 + 移除 WS_EX_TRANSPARENT（可操作面板內容）
+            let _ = window.set_always_on_top(true);
+            let _ = window.set_resizable(false);
+            if let Ok(raw) = window.hwnd() {
+                unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::*;
+                    let hwnd = HWND(raw.0 as isize);
+                    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
+                }
+            }
+            let _ = window.show();
+            // URL 面板：移除 drag overlay 讓使用者可操作網頁
+            if is_url {
+                let _ = window.eval(
+                    "var d=document.getElementById('wb-drag-overlay'); if(d) d.style.display='none';"
+                );
             }
         }
-        let _ = window.show();
-        let _ = window.set_focus();
-
-        // URL 面板：注入全屏 drag overlay 讓整個面板可拖移
-        if is_url {
-            let _ = window.eval(
-                "(() => {\
-                   var d = document.getElementById('wb-drag-overlay');\
-                   if (!d) {\
-                     d = document.createElement('div');\
-                     d.id = 'wb-drag-overlay';\
-                     d.style.cssText = 'position:fixed;inset:0;z-index:99999;cursor:move;-webkit-app-region:drag;background:rgba(137,180,250,0.08);';\
-                     document.documentElement.appendChild(d);\
-                   } else { d.style.display = 'block'; }\
-                 })();"
-            );
+        _ => {
+            // locked（都關）：置底 + 滑鼠穿透
+            let _ = window.set_always_on_top(false);
+            let _ = window.set_resizable(false);
+            if let Ok(raw) = window.hwnd() {
+                unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::*;
+                    let hwnd = HWND(raw.0 as isize);
+                    let _ = SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TRANSPARENT.0) as i32);
+                }
+            }
+            if is_url {
+                let _ = window.eval(
+                    "var d=document.getElementById('wb-drag-overlay'); if(d) d.style.display='none';"
+                );
+            }
         }
     }
 

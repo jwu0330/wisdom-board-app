@@ -318,8 +318,8 @@
         if (!panels.length) { listEl.innerHTML = '<div class="empty">尚未建立面板</div>'; return; }
         listEl.innerHTML = panels.map((p, i) => {
           const isUrl = p.type === 'url';
-          const pills = `<button class="pill ${p.mode==='edit'?'on':''}" data-action="mode" data-mode="edit">編輯</button>
-               <button class="pill ${p.mode==='locked'?'on':''}" data-action="mode" data-mode="locked">穿透</button>`;
+          const editing = p.editing || false;
+          const passthrough = p.passthrough || false;
           return `
           <div class="card" data-label="${esc(p.label)}">
             <div class="card-top">
@@ -328,7 +328,10 @@
             </div>
             <div class="card-body">
               ${p.url ? '<div class="card-url">'+esc(p.url)+'</div>' : ''}
-              <div class="pills">${pills}</div>
+              <div class="pills">
+                <button class="pill ${editing?'on':''}" data-action="toggle" data-flag="editing">編輯</button>
+                <button class="pill ${passthrough?'on':''}" data-action="toggle" data-flag="passthrough">穿透</button>
+              </div>
               <div class="zoom-row">
                 <span>縮放</span>
                 <input type="range" min="10" max="200" value="${Math.round(p.zoom*100)}" data-action="zoom" />
@@ -356,14 +359,18 @@
           } catch (e) {
             alert("關閉失敗: " + e);
           }
-        } else if (action === "mode") {
-          const m = btn.dataset.mode;
+        } else if (action === "toggle") {
+          const flag = btn.dataset.flag;
           const p = panels.find(x => x.label === label);
-          if (p) p.mode = m;
+          if (!p) return;
+          // toggle
+          p[flag] = !p[flag];
+          // 計算 mode：editing=edit, passthrough=locked, 都關=locked（但不穿透）
+          const mode = p.editing ? "edit" : (p.passthrough ? "passthrough" : "locked");
           try {
-            await invoke("set_panel_mode", { label, mode: m });
+            await invoke("set_panel_mode", { label, mode });
           } catch(e) {
-            alert("模式切換失敗: " + e);
+            console.error("模式切換失敗:", e);
           }
           render();
         }

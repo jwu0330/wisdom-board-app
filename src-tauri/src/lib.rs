@@ -162,6 +162,8 @@ pub fn run() {
             capture::open_capture_overlay,
             capture::capture_region,
             capture::get_screenshot,
+            capture::get_screenshot_base64,
+            capture::get_panel_screenshot_base64,
             capture::get_detected_url,
             capture::run_debug_tests,
             hotkey::get_hotkey_config,

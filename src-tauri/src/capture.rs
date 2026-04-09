@@ -298,6 +298,38 @@ pub fn get_screenshot(app: AppHandle) -> Result<String, String> {
     Ok(path)
 }
 
+/// 取得截圖的 base64 data URL（解決 release build asset:// 路徑問題）
+#[tauri::command]
+pub fn get_screenshot_base64(app: AppHandle) -> Result<String, String> {
+    let state = app.state::<crate::state::ManagedState>();
+    let path = state.lock()
+        .map_err(|e| format!("{e}"))?
+        .screenshot_path
+        .clone()
+        .ok_or_else(|| "尚未有截圖".to_string())?;
+
+    let data = std::fs::read(&path).map_err(|e| format!("讀取截圖失敗: {e}"))?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    Ok(format!("data:image/bmp;base64,{}", b64))
+}
+
+/// 取得面板截圖的 base64 data URL
+#[tauri::command]
+pub fn get_panel_screenshot_base64(app: AppHandle, label: String) -> Result<String, String> {
+    let state = app.state::<crate::state::ManagedState>();
+    let guard = state.lock().map_err(|e| format!("{e}"))?;
+    let path = guard.panels.get(&label)
+        .and_then(|p| p.screenshot_path.clone())
+        .ok_or_else(|| "無截圖".to_string())?;
+    drop(guard);
+
+    let data = std::fs::read(&path).map_err(|e| format!("讀取截圖失敗: {e}"))?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    Ok(format!("data:image/bmp;base64,{}", b64))
+}
+
 /// 取得截圖前偵測到的瀏覽器 URL
 #[tauri::command]
 pub fn get_detected_url(app: AppHandle) -> Option<String> {
