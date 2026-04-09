@@ -17,6 +17,7 @@
 7. [佈告欄功能規劃](#7-佈告欄功能規劃)
 8. [已知問題與修復紀錄](#8-已知問題與修復紀錄)
 9. [注意事項](#9-注意事項)
+10. [踩坑紀錄與經驗教訓](#10-踩坑紀錄與經驗教訓)
 
 ---
 
@@ -74,19 +75,16 @@ wisdomboard/
 │       └── build.yml              # CI/CD：自動建置 Windows EXE
 ├── src/                           # 前端程式碼
 │   ├── main.ts                    # 前端進入點（主視窗隱藏，無邏輯）
-│   ├── index.html                 # 主視窗 HTML（隱藏，無內容）
 │   ├── settings.html              # 設定視窗（面板管理 UI）
 │   ├── panel.html                 # 面板視窗（含模式切換工具列）
-│   ├── overlay.html               # 框選 Overlay（截圖背景 + 拖拉框選）
-│   ├── webpanel.html              # URL 面板（iframe 載入，備用方案）
-│   └── styles.css                 # 全域樣式（白底極簡風格）
+│   └── overlay.html               # 框選 Overlay（截圖背景 + 拖拉框選）
 ├── src-tauri/                     # Rust 後端
 │   ├── src/
 │   │   ├── main.rs                # 程式進入點（呼叫 lib::run）
 │   │   ├── lib.rs                 # 入口：插件/匣/命令註冊
 │   │   ├── state.rs               # 共用狀態與資料模型
 │   │   ├── panel.rs               # 面板 CRUD 命令
-│   │   ├── capture.rs             # 截圖、Overlay、DWM thumbnail
+│   │   ├── capture.rs             # 截圖、Overlay、瀏覽器 URL 偵測
 │   │   ├── hotkey.rs              # 快捷鍵監聽與自訂
 │   │   ├── persistence.rs         # JSON 設定檔讀寫
 │   │   └── input.rs               # 輸入轉發（PostMessage）
@@ -141,16 +139,14 @@ if !autostart_manager.is_enabled().unwrap_or(false) {
 - **URL 面板**：`create_url_panel` 使用 `WebviewUrl::External` 直接載入外部網頁
 - **擷取面板**：`capture_region` 在框選位置建立空白 panel.html 面板
 
-### 4.5 四種操作模式
+### 4.5 兩種操作模式
 
 | 模式 | 行為 |
 |------|------|
-| **觀看 (view)** | 面板可拖拉移動，不可調整大小 |
-| **操作 (interact)** | 可與面板內容互動 |
-| **調整 (resize)** | 可拖拉調整面板大小 |
-| **鎖定 (locked)** | 面板固定不動，不可關閉/移動 |
+| **編輯 (edit)** | 面板置頂，可拖拉移動、調整大小、操作內容 |
+| **鎖定 (locked)** | 面板置底，點擊穿透，不可操作 |
 
-settings.html 的 pill 按鈕直接設定模式；panel.html 的工具列支援「再按鎖定 = 解鎖」的 toggle UX。
+settings.html 的 pill 按鈕直接設定模式；panel.html 的工具列按鈕支援 toggle（鎖定 ↔ 解鎖）。
 
 ### 4.6 螢幕截圖與框選 Overlay
 
@@ -293,8 +289,8 @@ gh run download -n WisdomBoard-Portable
 | 截圖式 Overlay | ✅ 已實作 | GDI 截圖 + 全螢幕 Overlay + 拖拉框選 |
 | 面板管理 UI | ✅ 已實作 | settings.html 面板列表 + 模式/縮放控制 |
 | URL 面板 | ✅ 已實作 | `WebviewUrl::External` 直接載入 |
-| DWM Thumbnail | ✅ 已實作 | `DwmRegisterThumbnail` 即時縮圖，自動偵測目標視窗 |
-| 輸入轉發 | ✅ 已實作 | 操作模式下 `PostMessageW` 座標映射轉發 |
+| DWM Thumbnail | ⬜ 規劃中 | `DwmRegisterThumbnail` 即時縮圖（尚未實作） |
+| 輸入轉發 | ⬜ 規劃中 | 編輯模式下 `PostMessageW` 座標映射轉發（框架已建立，需目標視窗 HWND） |
 | 面板持久化 | ✅ 已實作 | JSON 設定檔自動儲存/恢復面板配置 |
 | 自訂快捷鍵 | ✅ 已實作 | 設定視窗 UI 設定 + `PostThreadMessage` 動態註冊 |
 
@@ -329,8 +325,8 @@ gh run download -n WisdomBoard-Portable
 ## 9. 注意事項
 
 ### 安全性
-- `tauri.conf.json` 中 `csp: null`（CSP 停用），這是為了允許載入外部網站
-- 未來應限縮 CSP 至僅允許特定來源
+- `tauri.conf.json` 已設定 CSP：允許 `'self'`、`'unsafe-inline'`（script/style）、`asset:` 和 `https:`（img）
+- URL 面板透過 `on_navigation(|_| true)` 允許所有外部導航
 
 ### 建置相關
 - 本機不需安裝 Windows SDK，所有建置透過 GitHub Actions 完成

@@ -251,7 +251,8 @@
         try {
           await invoke("set_autostart", { enabled: e.target.checked });
         } catch (err) {
-          hotkeyMsg.textContent = "自啟動設定失敗：" + err;
+          console.error("[settings] autostart 設定失敗:", err);
+          document.getElementById("st").textContent = "自啟動設定失敗：" + err;
         }
       });
       loadAutostart();
@@ -305,10 +306,8 @@
         if (!panels.length) { listEl.innerHTML = '<div class="empty">尚未建立面板</div>'; return; }
         listEl.innerHTML = panels.map((p, i) => {
           const isUrl = p.type === 'url';
-          const pills = isUrl
-            ? `<button class="pill ${p.mode==='edit'?'on':''}" data-action="mode" data-mode="edit">編輯</button>
-               <button class="pill ${p.mode==='locked'?'on':''}" data-action="mode" data-mode="locked">穿透</button>`
-            : `<button class="pill ${p.mode==='edit'?'on':''}" data-action="mode" data-mode="edit">編輯</button>`;
+          const pills = `<button class="pill ${p.mode==='edit'?'on':''}" data-action="mode" data-mode="edit">編輯</button>
+               <button class="pill ${p.mode==='locked'?'on':''}" data-action="mode" data-mode="locked">穿透</button>`;
           return `
           <div class="card" data-label="${esc(p.label)}">
             <div class="card-top">
@@ -383,7 +382,8 @@
         const type = (typeof d === "object" && d.type) ? d.type : "capture";
         const url = (typeof d === "object" && d.url) ? d.url : null;
         if (label && !panels.find(p => p.label === label)) {
-          panels.push({ label, url, type, mode: (typeof d === "object" && d.mode) || "edit", zoom: 1.0 });
+          const defaultMode = type === "capture" ? "locked" : "edit";
+          panels.push({ label, url, type, mode: (typeof d === "object" && d.mode) || defaultMode, zoom: 1.0 });
         }
         render();
         await getCurrentWindow().show();

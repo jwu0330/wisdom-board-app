@@ -12,7 +12,7 @@ const HOTKEY_SNIP: i32 = 1;
 /// 自訂訊息：重新註冊快捷鍵
 const WM_REREGISTER_HOTKEY: u32 = WM_APP + 1;
 
-/// 啟動快捷鍵監聽執行緒，回傳執行緒 ID
+/// 啟動快捷鍵監聽執行緒（執行緒 ID 存入 state）
 pub fn start_listener(app_handle: AppHandle) {
     let app = app_handle.clone();
 

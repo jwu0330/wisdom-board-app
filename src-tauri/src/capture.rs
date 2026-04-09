@@ -7,9 +7,98 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics,
+    GetSystemMetrics, GetForegroundWindow, GetWindowTextW,
     SM_CXSCREEN, SM_CYSCREEN,
 };
+
+/// 嘗試從前景視窗取得瀏覽器 URL（透過 UI Automation）
+fn detect_browser_url() -> Option<String> {
+    unsafe {
+        use windows::Win32::System::Com::{CoInitializeEx, CoCreateInstance, CLSCTX_ALL, COINIT_MULTITHREADED};
+        use windows::Win32::UI::Accessibility::*;
+
+        let fg = GetForegroundWindow();
+        if fg.0 == 0 { return None; }
+
+        // 先檢查視窗標題
+        let mut title_buf = [0u16; 512];
+        let len = GetWindowTextW(fg, &mut title_buf);
+        if len == 0 { return None; }
+        let title = String::from_utf16_lossy(&title_buf[..len as usize]);
+        println!("[WisdomBoard] 前景視窗標題: {}", title);
+
+        // 初始化 COM
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+        // 建立 IUIAutomation
+        let uia: IUIAutomation = match CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL) {
+            Ok(u) => u,
+            Err(e) => { println!("[WisdomBoard] UIAutomation 初始化失敗: {e}"); return None; }
+        };
+
+        let root = match uia.ElementFromHandle(fg) {
+            Ok(el) => el,
+            Err(e) => { println!("[WisdomBoard] ElementFromHandle 失敗: {e}"); return None; }
+        };
+
+        // 用 TrueCondition 搜尋所有子元素，篩選 Edit 控件
+        let true_cond = match uia.CreateTrueCondition() {
+            Ok(c) => c,
+            Err(_) => return None,
+        };
+
+        let elements = match root.FindAll(TreeScope_Descendants, &true_cond) {
+            Ok(els) => els,
+            Err(_) => return None,
+        };
+
+        let count = elements.Length().unwrap_or(0);
+        let mut found_url: Option<String> = None;
+
+        for i in 0..count {
+            let el = match elements.GetElement(i) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            // 只處理 Edit 類型
+            let ct = el.CurrentControlType().unwrap_or_default();
+            if ct != UIA_EditControlTypeId { continue; }
+
+            // 嘗試取得 ValuePattern
+            let pattern: IUIAutomationValuePattern = match el.GetCurrentPatternAs(UIA_ValuePatternId) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+            let val = match pattern.CurrentValue() {
+                Ok(v) => v.to_string(),
+                Err(_) => continue,
+            };
+
+            // 檢查是否像 URL
+            if val.starts_with("http://") || val.starts_with("https://")
+                || val.contains(".com") || val.contains(".org")
+                || val.contains(".net") || val.contains(".tw")
+                || val.contains(".io") || val.contains("localhost")
+            {
+                let url = if val.starts_with("http://") || val.starts_with("https://") {
+                    val
+                } else {
+                    format!("https://{}", val)
+                };
+                println!("[WisdomBoard] 偵測到 URL: {}", url);
+                found_url = Some(url);
+                break;
+            }
+        }
+
+        if found_url.is_none() {
+            println!("[WisdomBoard] 未偵測到 URL (檢查了 {} 個元素)", count);
+        }
+        found_url
+    }
+}
 
 /// 擷取全螢幕截圖並存為 BMP 暫存檔
 pub fn capture_screen_to_file() -> Result<String, String> {
@@ -76,7 +165,11 @@ pub fn capture_screen_to_file() -> Result<String, String> {
         let _ = DeleteDC(mem_dc);
         ReleaseDC(HWND(0), screen_dc);
 
-        let path = std::env::temp_dir().join("wisdomboard_screenshot.bmp");
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let path = std::env::temp_dir().join(format!("wisdomboard_screenshot_{}.bmp", ts % 1000000));
         let file_size = 54 + img_size;
         let mut f = std::fs::File::create(&path).map_err(|e| format!("建立檔案失敗: {e}"))?;
         use std::io::Write;
@@ -204,10 +297,27 @@ pub fn get_screenshot(app: AppHandle) -> Result<String, String> {
     Ok(path)
 }
 
+/// 取得截圖前偵測到的瀏覽器 URL
+#[tauri::command]
+pub fn get_detected_url(app: AppHandle) -> Option<String> {
+    let state = app.state::<crate::state::ManagedState>();
+    let guard = state.lock().ok()?;
+    guard.detected_url.clone()
+}
+
 #[tauri::command]
 pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("overlay") {
         let _ = win.close();
+    }
+
+    // 在隱藏視窗前偵測前景視窗的 URL
+    let detected_url = detect_browser_url();
+    {
+        let state = app.state::<crate::state::ManagedState>();
+        if let Ok(mut guard) = state.lock() {
+            guard.detected_url = detected_url;
+        };
     }
 
     // 截圖前隱藏所有 WisdomBoard 視窗，確保截到真正的桌面內容
@@ -364,11 +474,11 @@ pub fn capture_region(
     // 擷取螢幕區域為 BMP 檔案
     let screenshot_path = capture_region_to_file(phys_x, phys_y, phys_w, phys_h, &label)?;
 
-    // 邏輯座標（供 Tauri 視窗定位用）
-    let logical_x = phys_x as f64 / scale;
-    let logical_y = phys_y as f64 / scale;
-    let logical_w = phys_w as f64 / scale;
-    let logical_h = phys_h as f64 / scale;
+    // 使用原始邏輯座標（避免 f64→i32→f64 精度損失）
+    let logical_x = x;
+    let logical_y = y;
+    let logical_w = width;
+    let logical_h = height;
 
     // 先存入 state
     {

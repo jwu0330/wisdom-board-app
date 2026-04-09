@@ -1,5 +1,5 @@
 use crate::state::{ManagedState, PanelConfig, PanelType};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 use windows::Win32::Foundation::HWND;
 
@@ -21,15 +21,15 @@ pub fn set_square_corners(win: &tauri::WebviewWindow) {
     }
 }
 
-static PANEL_COUNT: AtomicI32 = AtomicI32::new(0);
+static PANEL_COUNT: AtomicU32 = AtomicU32::new(0);
 
 pub fn next_panel_id() -> String {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u32;
+        .as_millis() % 100000;
     let seq = PANEL_COUNT.fetch_add(1, Ordering::SeqCst);
-    format!("panel-{}-{}", ts % 100000, seq)
+    format!("panel-{}-{}", ts, seq)
 }
 
 /// 關閉所有面板與 overlay，並儲存狀態
@@ -123,9 +123,6 @@ pub fn create_url_panel(app: AppHandle, url: String) -> Result<String, String> {
         };
     }
 
-    // 驗證 URL 格式（在 thread 外先驗證）
-    url.parse::<url::Url>().map_err(|e: url::ParseError| format!("網址格式錯誤: {e}"))?;
-
     // 在獨立執行緒建立視窗，避免阻塞 command handler
     std::thread::spawn({
         let app = app.clone();
@@ -144,15 +141,7 @@ pub fn create_url_panel(app: AppHandle, url: String) -> Result<String, String> {
                 .always_on_top(true)
                 .skip_taskbar(true)
                 .transparent(false)
-                .on_navigation(|_url| true)
-                .initialization_script(
-                    // 注入頂部拖移條（8px）
-                    "(() => {\
-                       const d = document.createElement('div');\
-                       d.style.cssText = 'position:fixed;top:0;left:0;right:0;height:8px;z-index:99999;cursor:move;-webkit-app-region:drag;';\
-                       document.documentElement.appendChild(d);\
-                     })();"
-                );
+                .on_navigation(|_url| true);
 
             match builder.build() {
                 Ok(win) => {
@@ -222,8 +211,7 @@ pub fn create_url_panel_at(
 ) -> Result<String, String> {
     let label = next_panel_id();
 
-    let _parsed: url::Url = url
-        .parse()
+    url.parse::<url::Url>()
         .map_err(|e: url::ParseError| format!("網址格式錯誤: {e}"))?;
 
     {
@@ -264,14 +252,7 @@ pub fn create_url_panel_at(
                 .always_on_top(true)
                 .skip_taskbar(true)
                 .transparent(false)
-                .on_navigation(|_url| true)
-                .initialization_script(
-                    "(() => {\
-                       const d = document.createElement('div');\
-                       d.style.cssText = 'position:fixed;top:0;left:0;right:0;height:8px;z-index:99999;cursor:move;-webkit-app-region:drag;';\
-                       document.documentElement.appendChild(d);\
-                     })();"
-                );
+                .on_navigation(|_url| true);
 
             match builder.build() {
                 Ok(win) => {
@@ -350,7 +331,7 @@ pub fn create_panel(app: AppHandle) -> Result<String, String> {
                     y: 0.0,
                     width: 400.0,
                     height: 300.0,
-                    mode: "view".into(),
+                    mode: "locked".into(),
                     zoom: 1.0,
                     target_hwnd: None,
                     source_rect: None,
@@ -379,15 +360,36 @@ pub fn create_panel(app: AppHandle) -> Result<String, String> {
                     let app_handle = app.clone();
                     let panel_label = label.clone();
                     win.on_window_event(move |event| {
-                        if let tauri::WindowEvent::Destroyed = event {
-                            {
+                        match event {
+                            tauri::WindowEvent::Destroyed => {
+                                {
+                                    let state = app_handle.state::<ManagedState>();
+                                    if let Ok(mut guard) = state.lock() {
+                                        guard.panels.remove(&panel_label);
+                                    };
+                                }
+                                crate::persistence::auto_save(&app_handle);
+                                let _ = app_handle.emit("panel-closed", &panel_label);
+                            }
+                            tauri::WindowEvent::Moved(pos) => {
                                 let state = app_handle.state::<ManagedState>();
                                 if let Ok(mut guard) = state.lock() {
-                                    guard.panels.remove(&panel_label);
+                                    if let Some(p) = guard.panels.get_mut(&panel_label) {
+                                        p.x = pos.x as f64;
+                                        p.y = pos.y as f64;
+                                    }
                                 };
                             }
-                            crate::persistence::auto_save(&app_handle);
-                            let _ = app_handle.emit("panel-closed", &panel_label);
+                            tauri::WindowEvent::Resized(size) => {
+                                let state = app_handle.state::<ManagedState>();
+                                if let Ok(mut guard) = state.lock() {
+                                    if let Some(p) = guard.panels.get_mut(&panel_label) {
+                                        p.width = size.width as f64;
+                                        p.height = size.height as f64;
+                                    }
+                                };
+                            }
+                            _ => {}
                         }
                     });
                     crate::persistence::auto_save(&app);
@@ -418,6 +420,14 @@ pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(),
         .ok_or_else(|| format!("找不到面板: {}", label))?;
     let _ = app.emit_to(&label, "mode-changed", &mode);
 
+    // 判斷面板類型
+    let is_url = {
+        let state = app.state::<ManagedState>();
+        state.lock().ok()
+            .and_then(|g| g.panels.get(&label).map(|p| p.panel_type == PanelType::Url))
+            .unwrap_or(false)
+    };
+
     if mode == "locked" {
         // 鎖定：置底 + 不可調整 + 忽略滑鼠（WS_EX_TRANSPARENT 讓點擊穿透）
         let _ = window.set_always_on_top(false);
@@ -426,29 +436,47 @@ pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(),
             let hwnd = HWND(raw.0 as isize);
             unsafe {
                 use windows::Win32::UI::WindowsAndMessaging::*;
-                // 置底
                 let _ = SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                // 加上 WS_EX_TRANSPARENT 讓滑鼠點擊穿透（不會被激活到前面）
                 let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
                 SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TRANSPARENT.0) as i32);
             }
         }
+        // URL 面板：移除 drag overlay
+        if is_url {
+            let _ = window.eval(
+                "var d=document.getElementById('wb-drag-overlay'); if(d) d.style.display='none';"
+            );
+        }
     } else {
-        // 編輯：置頂 + 可拖移可調整 + 可操作
+        // 編輯：置頂 + 可拖移可調整
         let _ = window.set_always_on_top(true);
         let _ = window.set_resizable(true);
         if let Ok(raw) = window.hwnd() {
             let hwnd = HWND(raw.0 as isize);
             unsafe {
                 use windows::Win32::UI::WindowsAndMessaging::*;
-                // 移除 WS_EX_TRANSPARENT
                 let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
                 SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TRANSPARENT.0) as i32);
             }
         }
         let _ = window.show();
         let _ = window.set_focus();
+
+        // URL 面板：注入全屏 drag overlay 讓整個面板可拖移
+        if is_url {
+            let _ = window.eval(
+                "(() => {\
+                   var d = document.getElementById('wb-drag-overlay');\
+                   if (!d) {\
+                     d = document.createElement('div');\
+                     d.id = 'wb-drag-overlay';\
+                     d.style.cssText = 'position:fixed;inset:0;z-index:99999;cursor:move;-webkit-app-region:drag;background:rgba(137,180,250,0.08);';\
+                     document.documentElement.appendChild(d);\
+                   } else { d.style.display = 'block'; }\
+                 })();"
+            );
+        }
     }
 
     {
@@ -558,13 +586,14 @@ fn restore_url_panel(app: &AppHandle, config: &PanelConfig, url: &str) -> Result
         .title(format!("WisdomBoard - {}", url))
         .inner_size(config.width, config.height)
         .position(config.x, config.y)
-        .decorations(true)
-        .always_on_top(false)
-        .skip_taskbar(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
         .transparent(false)
         .on_navigation(|_url| true);
 
     let win = builder.build().map_err(|e| format!("{e}"))?;
+    set_square_corners(&win);
 
     {
         let state = app.state::<ManagedState>();

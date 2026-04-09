@@ -50,16 +50,16 @@ pub fn forward_input(
             .get(&label)
             .ok_or_else(|| format!("找不到面板: {}", label))?;
 
-        if panel.mode != "interact" {
-            return Ok(()); // 非操作模式，忽略
+        if panel.mode == "locked" {
+            return Ok(()); // 鎖定模式，忽略輸入
         }
 
         let target_hwnd = panel
             .target_hwnd
-            .ok_or("此面板無目標視窗")?;
+            .ok_or_else(|| "此面板無目標視窗".to_string())?;
         let source_rect = panel
             .source_rect
-            .ok_or("此面板無來源區域資訊")?;
+            .ok_or_else(|| "此面板無來源區域資訊".to_string())?;
 
         (target_hwnd, source_rect)
     }; // Mutex released here

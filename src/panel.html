@@ -16,9 +16,9 @@
       }
       #img.hidden { display:none; }
 
-      /* 拖移把手 — 編輯模式時頂部 8px */
+      /* 拖移把手 — 編輯模式時覆蓋整個面板 */
       #drag {
-        position:absolute; top:0; left:0; right:0; height:8px;
+        position:absolute; inset:0;
         cursor:move; -webkit-app-region:drag; z-index:20;
       }
       body.locked #drag { display:none; }
@@ -35,11 +35,12 @@
       #bar button {
         height:22px; border:1px solid #eee; background:#fff;
         color:#666; font-size:10px; cursor:pointer; padding:0 8px;
+        -webkit-app-region:no-drag;
       }
       #bar button:hover { background:#f5f5f5; color:#111; }
 
       /* 調整大小把手 — 編輯模式才顯示 */
-      .rh { position:absolute; z-index:25; display:none; }
+      .rh { position:absolute; z-index:25; display:none; -webkit-app-region:no-drag; }
       body.edit .rh { display:block; }
       .rh.r { top:0; right:0; width:6px; height:100%; cursor:ew-resize; }
       .rh.b { bottom:0; left:0; width:100%; height:6px; cursor:ns-resize; }
@@ -74,18 +75,46 @@
     <div class="rh c" id="rc"></div>
 
     <div id="bar">
-      <button id="btn-lock" title="鎖定">鎖定</button>
+      <button id="btn-lock" title="鎖定/解鎖">鎖定</button>
       <button id="btn-x" title="關閉" style="color:#c00;">關閉</button>
     </div>
 
     <script>
     (function(){
       var mode = "locked"; // 預設鎖定
-      var win = window.__TAURI__ ? window.__TAURI__.window.getCurrentWindow() : null;
-      var invoke = window.__TAURI__ ? window.__TAURI__.core.invoke : null;
-      var panelLabel = win ? win.label : "";
+      var win = null;
+      var invoke = null;
+      var panelLabel = "";
       var imgEl = document.getElementById("img");
       var placeholder = document.getElementById("placeholder");
+
+      function initTauri() {
+        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+          win = window.__TAURI__.window.getCurrentWindow();
+          invoke = window.__TAURI__.core.invoke;
+          panelLabel = win ? win.label : "";
+          // 載入截圖
+          if (invoke && panelLabel) {
+            invoke("get_panel_screenshot", { label: panelLabel }).then(function(path) {
+              if (path) loadScreenshot(path);
+            }).catch(function(){});
+          }
+          // 監聽模式切換事件
+          window.__TAURI__.event.listen("mode-changed", function(ev){
+            setMode(ev.payload);
+          });
+          return true;
+        }
+        return false;
+      }
+
+      var waitCount = 0;
+      function waitForTauri() {
+        if (!initTauri() && waitCount++ < 50) {
+          setTimeout(waitForTauri, 100);
+        }
+      }
+      waitForTauri();
 
       // 載入截圖
       function loadScreenshot(path) {
@@ -110,18 +139,12 @@
         };
       }
 
-      // 從後端取得截圖路徑
-      if (invoke && panelLabel) {
-        invoke("get_panel_screenshot", { label: panelLabel }).then(function(path) {
-          if (path) loadScreenshot(path);
-        }).catch(function(){});
-      }
-
-      // 鎖定按鈕
+      // 鎖定/解鎖 toggle 按鈕
       document.getElementById("btn-lock").addEventListener("click", function(){
-        setMode("locked");
+        var newMode = (mode === "locked") ? "edit" : "locked";
+        setMode(newMode);
         if (invoke && panelLabel) {
-          invoke("set_panel_mode", { label: panelLabel, mode: "locked" }).catch(function(){});
+          invoke("set_panel_mode", { label: panelLabel, mode: newMode }).catch(function(){});
         }
       });
 
@@ -137,6 +160,7 @@
       function setMode(m) {
         mode = m;
         document.body.className = m === "locked" ? "locked" : "edit";
+        document.getElementById("btn-lock").textContent = m === "locked" ? "解鎖" : "鎖定";
         if (win) win.setResizable(m === "edit");
       }
 
@@ -164,13 +188,6 @@
         win.setSize(new window.__TAURI__.window.LogicalSize(nw, nh));
       });
       document.addEventListener("mouseup", function(){ resizing = false; });
-
-      // 監聽模式切換事件（來自 settings）
-      if (window.__TAURI__) {
-        window.__TAURI__.event.listen("mode-changed", function(ev){
-          setMode(ev.payload);
-        });
-      }
     })();
     </script>
   </body>

@@ -94,6 +94,7 @@
       <div class="opt" id="opt-url"><b>網頁面板（可互動）</b><small>輸入 URL，可操作網頁內容</small></div>
       <div class="opt" id="opt-cap"><b>截圖面板（靜態）</b><small>擷取螢幕畫面為靜態圖片</small></div>
       <div id="url-row">
+        <div id="detected-hint" style="display:none;font-size:10px;color:#090;margin-bottom:4px;">已自動偵測網址</div>
         <input id="url-input" placeholder="https://www.youtube.com/watch?v=..." />
         <div class="btns">
           <button class="btn-p" id="url-go">建立</button>
@@ -209,7 +210,6 @@
           // 定位在框選區域右下方
           var px = r.x + r.w + 10;
           var py = r.y + r.h + 10;
-          // 防止超出螢幕
           if (px + 340 > window.innerWidth) px = r.x - 350;
           if (py + 200 > window.innerHeight) py = r.y - 210;
           if (px < 10) px = 10;
@@ -218,6 +218,19 @@
           ap.style.top = py + "px";
           ap.style.display = "block";
           document.getElementById("url-row").style.display = "none";
+
+          // 自動取得偵測到的 URL
+          if (window.__TAURI__) {
+            window.__TAURI__.core.invoke("get_detected_url").then(function(url) {
+              if (url) {
+                document.getElementById("url-input").value = url;
+                // 有偵測到 URL，直接展開 URL 輸入區域
+                document.getElementById("url-row").style.display = "block";
+                document.getElementById("detected-hint").style.display = "block";
+                document.getElementById("detected-hint").textContent = "已自動偵測網址";
+              }
+            }).catch(function(){});
+          }
         }
 
         function resetSelection() {

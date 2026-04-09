@@ -20,9 +20,11 @@ pub struct PanelConfig {
     pub height: f64,
     pub mode: String,
     pub zoom: f64,
-    /// 擷取面板的目標視窗 HWND（用於 DWM thumbnail 和輸入轉發）
+    /// 擷取面板的目標視窗 HWND（用於 DWM thumbnail 和輸入轉發，僅執行時使用）
+    #[serde(skip)]
     pub target_hwnd: Option<isize>,
-    /// 目標視窗中的擷取區域 [x, y, w, h]（物理像素）
+    /// 目標視窗中的擷取區域 [x, y, w, h]（物理像素，僅執行時使用）
+    #[serde(skip)]
     pub source_rect: Option<[i32; 4]>,
     /// 擷取面板的截圖 BMP 檔案路徑
     #[serde(default)]
@@ -78,6 +80,8 @@ pub struct AppState {
     pub autostart: bool,
     /// 框選 overlay 用的截圖路徑（在 overlay 開啟前截好，overlay JS 讀取此值）
     pub screenshot_path: Option<String>,
+    /// 截圖前偵測到的前景視窗 URL（瀏覽器網址列）
+    pub detected_url: Option<String>,
 }
 
 impl Default for AppState {
@@ -88,6 +92,7 @@ impl Default for AppState {
             hotkey_thread_id: None,
             autostart: true,
             screenshot_path: None,
+            detected_url: None,
         }
     }
 }

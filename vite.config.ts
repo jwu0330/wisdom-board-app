@@ -14,7 +14,6 @@ export default defineConfig(async () => ({
         settings: resolve(__dirname, "src/settings.html"),
         panel: resolve(__dirname, "src/panel.html"),
         overlay: resolve(__dirname, "src/overlay.html"),
-        webpanel: resolve(__dirname, "src/webpanel.html"),
       },
     },
   },

@@ -138,7 +138,7 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            println!("[WisdomBoard] v0.3.0 已啟動");
+            println!("[WisdomBoard] v{} 已啟動", env!("CARGO_PKG_VERSION"));
             println!("[WisdomBoard] 按快捷鍵開啟設定視窗");
 
             Ok(())
@@ -158,6 +158,7 @@ pub fn run() {
             capture::open_capture_overlay,
             capture::capture_region,
             capture::get_screenshot,
+            capture::get_detected_url,
             capture::run_debug_tests,
             hotkey::get_hotkey_config,
             hotkey::set_hotkey,
@@ -169,8 +170,11 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             match event {
-                tauri::RunEvent::ExitRequested { api, .. } => {
-                    api.prevent_exit();
+                tauri::RunEvent::ExitRequested { api, code, .. } => {
+                    // 只有非明確退出（如最後一個視窗關閉）才攔截，保持 tray 常駐
+                    if code.is_none() {
+                        api.prevent_exit();
+                    }
                 }
                 tauri::RunEvent::Exit => {
                     // 終止快捷鍵執行緒
