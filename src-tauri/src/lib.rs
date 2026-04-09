@@ -1,6 +1,5 @@
 mod capture;
 mod hotkey;
-mod input;
 mod panel;
 mod persistence;
 mod state;
@@ -149,7 +148,6 @@ pub fn run() {
             panel::create_url_panel_at,
             panel::close_panel,
             panel::close_all_panels,
-            panel::focus_panel,
             panel::set_mode,
             panel::set_panel_mode,
             panel::set_panel_zoom,
@@ -162,7 +160,6 @@ pub fn run() {
             capture::run_debug_tests,
             hotkey::get_hotkey_config,
             hotkey::set_hotkey,
-            input::forward_input,
             get_autostart,
             set_autostart,
         ])

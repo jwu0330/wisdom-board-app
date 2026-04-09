@@ -76,19 +76,17 @@ fn detect_browser_url() -> Option<String> {
                 Err(_) => continue,
             };
 
-            // 檢查是否像 URL
-            if val.starts_with("http://") || val.starts_with("https://")
-                || val.contains(".com") || val.contains(".org")
-                || val.contains(".net") || val.contains(".tw")
-                || val.contains(".io") || val.contains("localhost")
-            {
-                let url = if val.starts_with("http://") || val.starts_with("https://") {
-                    val
-                } else {
-                    format!("https://{}", val)
-                };
-                println!("[WisdomBoard] 偵測到 URL: {}", url);
-                found_url = Some(url);
+            // 檢查是否像 URL（先嘗試直接解析，再嘗試加 https://）
+            let candidate = if val.starts_with("http://") || val.starts_with("https://") {
+                val.clone()
+            } else if val.contains('.') || val.starts_with("localhost") {
+                format!("https://{}", val)
+            } else {
+                continue;
+            };
+            if candidate.parse::<url::Url>().is_ok() {
+                println!("[WisdomBoard] 偵測到 URL: {}", candidate);
+                found_url = Some(candidate);
                 break;
             }
         }
@@ -522,8 +520,15 @@ pub fn capture_region(
             match builder.build() {
                 Ok(win) => {
                     crate::panel::set_square_corners(&win);
-                    // 預設鎖定模式：置底 + 點擊穿透
-                    let _ = crate::panel::set_panel_mode(app.clone(), label.clone(), "locked".into());
+                    // 延遲套用鎖定模式，確保 webview 就緒
+                    {
+                        let a = app.clone();
+                        let l = label.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            let _ = crate::panel::set_panel_mode(a, l, "locked".into());
+                        });
+                    }
                     let app_handle = app.clone();
                     let panel_label = label.clone();
                     win.on_window_event(move |event| {
@@ -582,6 +587,7 @@ fn update_panel_position(app: &AppHandle, label: &str, x: f64, y: f64) {
             panel.y = y;
         }
     };
+    crate::persistence::auto_save(app);
 }
 
 fn update_panel_size(app: &AppHandle, label: &str, width: f64, height: f64) {

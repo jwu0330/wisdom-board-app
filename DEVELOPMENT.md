@@ -86,8 +86,7 @@ wisdomboard/
 │   │   ├── panel.rs               # 面板 CRUD 命令
 │   │   ├── capture.rs             # 截圖、Overlay、瀏覽器 URL 偵測
 │   │   ├── hotkey.rs              # 快捷鍵監聽與自訂
-│   │   ├── persistence.rs         # JSON 設定檔讀寫
-│   │   └── input.rs               # 輸入轉發（PostMessage）
+│   │   └── persistence.rs         # JSON 設定檔讀寫
 │   ├── Cargo.toml                 # Rust 依賴管理
 │   ├── tauri.conf.json            # Tauri 應用設定
 │   ├── capabilities/              # 權限定義
@@ -99,6 +98,7 @@ wisdomboard/
 ├── tsconfig.json                  # TypeScript 設定
 ├── vite.config.ts                 # Vite 打包設定
 ├── SPECIFICATION.md               # 專案規格書
+├── TROUBLESHOOTING.md             # 執行 / 部署 / 疑難排解
 └── DEVELOPMENT.md                 # 本文件
 ```
 
@@ -288,7 +288,7 @@ gh run download -n WisdomBoard-Portable
 | 面板管理 UI | ✅ 已實作 | settings.html 面板列表 + 模式/縮放控制 |
 | URL 面板 | ✅ 已實作 | `WebviewUrl::External` 直接載入 |
 | DWM Thumbnail | ⬜ 規劃中 | `DwmRegisterThumbnail` 即時縮圖（尚未實作） |
-| 輸入轉發 | ⬜ 規劃中 | 編輯模式下 `PostMessageW` 座標映射轉發（框架已建立，需目標視窗 HWND） |
+| 輸入轉發 | ⬜ 規劃中 | 需搭配 DWM Thumbnail 實作，目前已移除 input.rs 死程式碼 |
 | 面板持久化 | ✅ 已實作 | JSON 設定檔自動儲存/恢復面板配置 |
 | 自訂快捷鍵 | ✅ 已實作 | 設定視窗 UI 設定 + `PostThreadMessage` 動態註冊 |
 
@@ -312,7 +312,7 @@ gh run download -n WisdomBoard-Portable
 | set_mode 廣播到所有視窗 | 改為只對 panel-* 視窗發送 |
 | 截圖 BMP 上下顛倒 | biHeight 改為負值（top-down BMP） |
 | overlay 框選座標未考慮 DPI | capture_region 乘以 scale factor |
-| styles.css 深色主題與設計不符 | 改為白底黑字極簡風格 |
+| styles.css 深色主題與設計不符 | 已刪除獨立 CSS，樣式內聯於各 HTML |
 | Cargo.toml description/authors 為模板值 | 更新為專案實際資訊 |
 | capabilities 只授權 main 視窗 | 擴展到 settings/overlay/panel-* |
 | 根 index.html 為 Tauri 模板 | 替換為最小化頁面 |
@@ -364,8 +364,10 @@ gh run download -n WisdomBoard-Portable
 
 如需本機編譯：透過 Visual Studio Installer → 修改 → 個別元件 → 勾選「Windows 11 SDK」。
 
-### 10.4 SetParent 後視窗消失（Windows 11）
+### 10.4 WorkerW 桌面嵌入（已放棄）
 
-**根本原因：** Windows 11 的 `SetParent` 會將子視窗的尺寸重置或隱藏。
+**原始構想：** 將視窗嵌入 `WorkerW` 層，使面板存在於桌布之上、圖示之下。
 
-**解決方式：** 在 `SetParent` 之後立即呼叫 `MoveWindow` + `ShowWindow`。
+**放棄原因：** `SetParent` 在 Windows 11 下導致子視窗消失/尺寸重置，且全交互支援困難。
+
+**替代方案（已實作）：** 使用 `always_on_top`（編輯模式置頂）與 `HWND_BOTTOM` + `WS_EX_TRANSPARENT`（鎖定模式置底穿透）。

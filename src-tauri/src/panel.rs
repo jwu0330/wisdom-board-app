@@ -2,6 +2,7 @@ use crate::state::{ManagedState, PanelConfig, PanelType};
 use std::sync::atomic::{AtomicU32, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 use windows::Win32::Foundation::HWND;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 移除 Windows 11 視窗圓角
 pub fn set_square_corners(win: &tauri::WebviewWindow) {
@@ -24,10 +25,10 @@ pub fn set_square_corners(win: &tauri::WebviewWindow) {
 static PANEL_COUNT: AtomicU32 = AtomicU32::new(0);
 
 pub fn next_panel_id() -> String {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() % 100000;
+        .as_millis();
     let seq = PANEL_COUNT.fetch_add(1, Ordering::SeqCst);
     format!("panel-{}-{}", ts, seq)
 }
@@ -35,23 +36,25 @@ pub fn next_panel_id() -> String {
 /// 關閉所有面板與 overlay，並儲存狀態
 #[tauri::command]
 pub fn close_all_panels(app: AppHandle) -> Result<(), String> {
-    // 關閉所有 panel- 視窗
-    let windows: Vec<_> = app.webview_windows()
+    let labels: Vec<String> = app.webview_windows()
         .into_iter()
         .filter(|(label, _)| label.starts_with("panel-") || label == "overlay")
+        .map(|(label, _)| label)
         .collect();
 
-    for (label, win) in &windows {
-        let _ = win.close();
-        println!("[WisdomBoard] 關閉視窗: {}", label);
-    }
-
-    // 清空 state
+    // 先清空 state，避免 Destroyed handler 重複操作
     {
         let state = app.state::<ManagedState>();
         if let Ok(mut guard) = state.lock() {
             guard.panels.clear();
         };
+    }
+
+    for label in &labels {
+        if let Some(win) = app.get_webview_window(label) {
+            let _ = win.close();
+            println!("[WisdomBoard] 關閉視窗: {}", label);
+        }
     }
 
     crate::persistence::auto_save(&app);
@@ -184,7 +187,7 @@ pub fn create_url_panel(app: AppHandle, url: String) -> Result<String, String> {
                     crate::persistence::auto_save(&app);
                     println!("[WisdomBoard] URL 面板 {} 已建立: {}", label, url);
                     let _ = app.emit("panel-created", serde_json::json!({
-                        "label": &label, "type": "url", "url": &url
+                        "label": &label, "type": "url", "url": &url, "mode": "edit"
                     }));
                 }
                 Err(e) => {
@@ -395,7 +398,7 @@ pub fn create_panel(app: AppHandle) -> Result<String, String> {
                     crate::persistence::auto_save(&app);
                     println!("[WisdomBoard] 面板 {} 已建立", label);
                     let _ = app.emit("panel-created", serde_json::json!({
-                        "label": &label, "type": "capture", "url": null
+                        "label": &label, "type": "capture", "url": null, "mode": "locked"
                     }));
                 }
                 Err(e) => {
@@ -536,15 +539,6 @@ pub fn close_panel(app: AppHandle, label: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn focus_panel(app: AppHandle, label: String) -> Result<(), String> {
-    let window = app
-        .get_webview_window(&label)
-        .ok_or_else(|| format!("找不到面板: {}", label))?;
-    let _ = window.show();
-    window.set_focus().map_err(|e| format!("{e}"))
-}
-
-#[tauri::command]
 pub fn set_mode(app: AppHandle, mode: String) -> Result<(), String> {
     let labels: Vec<String> = app.webview_windows()
         .into_keys()
@@ -573,15 +567,13 @@ pub fn restore_panels(app: &AppHandle, configs: Vec<PanelConfig>) {
         match result {
             Ok(label) => {
                 println!("[WisdomBoard] 已恢復面板: {}", label);
-                // 恢復面板的模式
-                if config.mode == "locked" {
-                    let a = app.clone();
-                    let l = label;
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(200));
-                        let _ = set_panel_mode(a, l, "locked".into());
-                    });
-                }
+                let a = app.clone();
+                let l = label;
+                let m = config.mode.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    let _ = set_panel_mode(a, l, m);
+                });
             }
             Err(e) => eprintln!("[WisdomBoard] 恢復面板失敗: {e}"),
         }
@@ -589,16 +581,17 @@ pub fn restore_panels(app: &AppHandle, configs: Vec<PanelConfig>) {
 }
 
 fn restore_url_panel(app: &AppHandle, config: &PanelConfig, url: &str) -> Result<String, String> {
-    let label = config.label.clone(); // 使用原始 label 而非 next_panel_id()
+    let label = config.label.clone();
     let parsed_url: url::Url = url.parse().map_err(|e: url::ParseError| format!("URL 解析失敗: {e}"))?;
     let webview_url = tauri::WebviewUrl::External(parsed_url);
+    let is_edit = config.mode != "locked";
 
     let builder = tauri::WebviewWindowBuilder::new(app, &label, webview_url)
         .title(format!("WisdomBoard - {}", url))
         .inner_size(config.width, config.height)
         .position(config.x, config.y)
         .decorations(false)
-        .always_on_top(true)
+        .always_on_top(is_edit)
         .skip_taskbar(true)
         .transparent(false)
         .on_navigation(|_url| true);
@@ -657,14 +650,16 @@ fn restore_url_panel(app: &AppHandle, config: &PanelConfig, url: &str) -> Result
 }
 
 fn restore_capture_panel(app: &AppHandle, config: &PanelConfig) -> Result<String, String> {
-    let label = config.label.clone(); // 使用原始 label
+    let label = config.label.clone();
     let url = tauri::WebviewUrl::App("src/panel.html".into());
+    let is_edit = config.mode != "locked";
+
     let builder = tauri::WebviewWindowBuilder::new(app, &label, url)
         .title("WisdomBoard Capture".to_string())
         .inner_size(config.width, config.height)
         .position(config.x, config.y)
         .decorations(false)
-        .always_on_top(true)
+        .always_on_top(is_edit)
         .skip_taskbar(true)
         .transparent(false);
 

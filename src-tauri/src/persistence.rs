@@ -10,9 +10,11 @@ fn config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 }
 
 pub fn save(app: &AppHandle, state: &AppState) {
+    let mut panels: Vec<_> = state.panels.values().cloned().collect();
+    panels.sort_by(|a, b| a.label.cmp(&b.label));
     let config = AppConfig {
         version: 1,
-        panels: state.panels.values().cloned().collect(),
+        panels,
         hotkey: state.hotkey.clone(),
         autostart: state.autostart,
     };

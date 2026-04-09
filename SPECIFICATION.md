@@ -14,7 +14,7 @@
 | 編號 | 功能名稱 | 詳細說明 | 優先級 |
 | :--- | :--- | :--- | :--- |
 | **F01** | **極輕量網頁渲染** | 基於 Tauri v2 與 WebView2，支援現代 Web 標準且保持極低耗電。 | 極高 |
-| **F02** | **底層釘選 (Pinning)** | 透過 Windows API 將視窗掛載於 `WorkerW` 層，確保 `Win+D` 不會將其最小化。 | 極高 |
+| **F02** | **雙模式釘選 (Pinning)** | 編輯模式：`always_on_top` 置頂可操作。鎖定模式：`HWND_BOTTOM` + `WS_EX_TRANSPARENT` 置底穿透。（原 WorkerW 嵌入方案因 Windows 11 相容性已放棄） | 極高 |
 | **F03** | **全交互支援** | 支援滑鼠點擊、文字輸入、捲動等操作，不只是單純顯示畫面。 | 高 |
 | **F04** | **外觀客製化** | 支援無邊框 (Borderless)、自訂透明度 (Transparent) 與無任務列顯示 (Skip Taskbar)。 | 高 |
 | **F05** | **開機自啟動與系統匣** | 可選配 `tauri-plugin-autostart` 達到開機即進入生產力狀態，並支援右下角的系統匣 (System Tray) 控制。 | 中 |
@@ -29,10 +29,11 @@
 * **API 交互：** Windows Crate (`windows` crate，專注於 `User32` / `WindowsAndMessaging`)
 
 ### 🏗️ 視窗層級邏輯 (The "Magic" Logic)
-為了讓看板釘在「圖示之下、桌布之上」，後端的 Rust 程式將執行以下流程：
-1. **Spawn WorkerW：** 向 `Progman` 發送 `0x052C` 訊息，強迫系統生成新的 `WorkerW` 視窗。
-2. **Find Parent：** 透過 `EnumWindows` 或類似技術，定位到剛剛生成、專門用於放置桌布背景的 `WorkerW` 句柄 (HWND)。
-3. **SetParent：** 取得 Tauri WebView 的 HWND 後，呼叫 `SetParent(WebView_HWND, WorkerW_HWND)`。
+面板以兩種 Z-order 狀態存在：
+1. **編輯模式 (Edit)：** `always_on_top(true)` — 面板置頂，可拖移、調整大小、與內容互動。
+2. **鎖定模式 (Locked)：** `SetWindowPos(HWND_BOTTOM)` + `WS_EX_TRANSPARENT` — 面板沉到底層，所有點擊穿透到下方視窗。
+
+> 原始設計使用 `SetParent` 將面板嵌入 `WorkerW` 層（圖示下、桌布上），但因 Windows 11 相容性問題已放棄。
 
 ---
 
@@ -40,10 +41,10 @@
 
 * **無縫感：** 預設移除所有視窗控制項（標題列、縮小、關閉按鈕），並在 `tauri.conf.json` 設定 `decorations: false`。
 * **無形感：** 在工具列上隱藏標籤 (`skipTaskbar: true`)，讓用戶感覺這就是 OS 的一部分。
-* **穿透/捕捉切換：** 
-    * *一般模式：* 滑鼠可直接操作網頁內容。
-    * *(未來擴充) 穿透模式：* 變更視窗為 Click-Through 樣式，讓滑鼠點擊穿透到桌面圖示。
-* **底色支援：** `transparent: true` 以支援網頁半透明或全透明背景。
+* **雙模式切換：** 
+    * *編輯模式 (Edit)：* 面板置頂，可拖移、調整大小、操作網頁內容。
+    * *鎖定模式 (Locked)：* 面板置底，Click-Through 穿透，不可操作。
+* **底色支援：** 面板預設不透明背景，適合釘選網頁內容。
 
 ---
 

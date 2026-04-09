@@ -381,9 +381,11 @@
         const label = typeof d === "string" ? d : d.label;
         const type = (typeof d === "object" && d.type) ? d.type : "capture";
         const url = (typeof d === "object" && d.url) ? d.url : null;
+        const defaultMode = type === "capture" ? "locked" : "edit";
+        const mode = (typeof d === "object" && d.mode) ? d.mode : defaultMode;
+        const zoom = (typeof d === "object" && typeof d.zoom === "number") ? d.zoom : 1.0;
         if (label && !panels.find(p => p.label === label)) {
-          const defaultMode = type === "capture" ? "locked" : "edit";
-          panels.push({ label, url, type, mode: (typeof d === "object" && d.mode) || defaultMode, zoom: 1.0 });
+          panels.push({ label, url, type, mode, zoom });
         }
         render();
         await getCurrentWindow().show();
@@ -395,7 +397,11 @@
           const existing = await invoke("list_panels");
           for (const p of existing) {
             const found = panels.find(x => x.label === p.label);
-            if (!found) {
+            if (found) {
+              found.mode = p.mode || found.mode;
+              found.zoom = p.zoom || found.zoom;
+              found.url = p.url || found.url;
+            } else {
               panels.push({
                 label: p.label,
                 url: p.url || null,
@@ -405,6 +411,9 @@
               });
             }
           }
+          // 移除 state 中不存在的面板
+          const existingLabels = new Set(existing.map(p => p.label));
+          panels = panels.filter(p => existingLabels.has(p.label));
           render();
         } catch (e) {
           console.warn("[settings] list_panels 失敗:", e);

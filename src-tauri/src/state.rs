@@ -20,10 +20,10 @@ pub struct PanelConfig {
     pub height: f64,
     pub mode: String,
     pub zoom: f64,
-    /// 擷取面板的目標視窗 HWND（用於 DWM thumbnail 和輸入轉發，僅執行時使用）
+    /// 保留：未來 DWM Thumbnail 功能的目標視窗 HWND
     #[serde(skip)]
     pub target_hwnd: Option<isize>,
-    /// 目標視窗中的擷取區域 [x, y, w, h]（物理像素，僅執行時使用）
+    /// 保留：未來 DWM Thumbnail 功能的來源區域 [x, y, w, h]
     #[serde(skip)]
     pub source_rect: Option<[i32; 4]>,
     /// 擷取面板的截圖 BMP 檔案路徑
