@@ -21,7 +21,6 @@
     "core:window:allow-scale-factor",
     "core:event:default",
     "core:event:allow-emit",
-    "core:event:allow-listen",
-    "opener:default"
+    "core:event:allow-listen"
   ]
 }

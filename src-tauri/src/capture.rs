@@ -229,20 +229,6 @@ pub fn capture_region_to_file(x: i32, y: i32, w: i32, h: i32, label: &str) -> Re
     Ok(path_str)
 }
 
-#[tauri::command]
-pub fn get_screenshot(app: AppHandle) -> Result<String, String> {
-    println!("[WisdomBoard] get_screenshot invoked");
-    // 回傳 open_capture_overlay 預先截好的截圖路徑
-    let state = app.state::<crate::state::ManagedState>();
-    let path = state.lock()
-        .map_err(|e| format!("state lock 失敗: {e}"))?
-        .screenshot_path
-        .clone()
-        .ok_or_else(|| "尚未有截圖".to_string())?;
-    println!("[WisdomBoard] get_screenshot OK: {}", path);
-    Ok(path)
-}
-
 /// 取得截圖的 base64 data URL（解決 release build asset:// 路徑問題）
 #[tauri::command]
 pub fn get_screenshot_base64(app: AppHandle) -> Result<String, String> {

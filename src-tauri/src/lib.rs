@@ -64,7 +64,6 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
         ))
-        .plugin(tauri_plugin_opener::init())
         .manage(Mutex::new(state::AppState::default()) as ManagedState)
         .setup(|app| {
             // 隱藏主視窗
@@ -158,10 +157,8 @@ pub fn run() {
             panel::set_panel_mode,
             panel::set_panel_zoom,
             panel::list_panels,
-            panel::get_panel_screenshot,
             capture::open_capture_overlay,
             capture::capture_region,
-            capture::get_screenshot,
             capture::get_screenshot_base64,
             capture::get_panel_screenshot_base64,
             capture::get_detected_url,

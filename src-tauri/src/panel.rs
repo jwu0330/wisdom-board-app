@@ -567,13 +567,6 @@ pub fn set_panel_zoom(app: AppHandle, label: String, zoom: f64) -> Result<(), St
 }
 
 #[tauri::command]
-pub fn get_panel_screenshot(app: AppHandle, label: String) -> Option<String> {
-    let state = app.state::<ManagedState>();
-    let guard = state.lock().ok()?;
-    guard.panels.get(&label)?.screenshot_path.clone()
-}
-
-#[tauri::command]
 pub fn close_panel(app: AppHandle, label: String) -> Result<(), String> {
     let window = app
         .get_webview_window(&label)
