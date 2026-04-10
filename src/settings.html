@@ -452,8 +452,15 @@
         }
       });
 
-      const _unlistenClosed = listen("panel-closed", (e) => { panels=panels.filter(p=>p.label!==e.payload); render(); });
-      const _unlistenCreated = listen("panel-created", async (e) => {
+      const unlisteners = [];
+      unlisteners.push(listen("panel-closed", (e) => { panels=panels.filter(p=>p.label!==e.payload); render(); }));
+      unlisteners.push(listen("panel-create-failed", (e) => {
+        const label = e.payload;
+        panels = panels.filter(p => p.label !== label);
+        render();
+        document.getElementById("st").textContent = "面板建立失敗";
+      }));
+      unlisteners.push(listen("panel-created", async (e) => {
         const d = e.payload;
         const label = typeof d === "string" ? d : d.label;
         const type = (typeof d === "object" && d.type) ? d.type : "capture";
@@ -466,6 +473,11 @@
         render();
         await getCurrentWindow().show();
         await getCurrentWindow().setFocus();
+      }));
+
+      // 視窗關閉時清理所有 listener（防止累積）
+      window.addEventListener("beforeunload", () => {
+        unlisteners.forEach(async (p) => { try { (await p)(); } catch {} });
       });
 
       async function syncPanels() {

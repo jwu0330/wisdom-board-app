@@ -11,6 +11,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SM_CXSCREEN, SM_CYSCREEN,
 };
 
+// ─── 時序常數 ───────────────────────────────────────────────────────────
+// 這些 sleep 值是經過實測調整的，改動前請先理解原因。
+/// 關閉舊 overlay / 等待一幀渲染結束（單次 VSync ~16ms，留 buffer）
+const FRAME_DELAY_MS: u64 = 100;
+/// 隱藏 settings 視窗後等待 OS 將前景切換到瀏覽器（UIAutomation 需要正確的 foreground window）
+const FOREGROUND_SWITCH_MS: u64 = 300;
+/// 隱藏所有 WisdomBoard 視窗後等待 DWM 動畫完成（避免截到半透明殘影）
+const WINDOW_HIDE_ANIMATION_MS: u64 = 600;
+/// 截圖面板建立後延遲套用 locked 模式（等 WebView2 初次渲染完成）
+const CAPTURE_PANEL_MODE_DELAY_MS: u64 = 200;
+
 /// 嘗試從前景視窗取得瀏覽器 URL（透過 UI Automation）
 fn detect_browser_url() -> Option<String> {
     unsafe {
@@ -289,7 +300,7 @@ fn restore_panels_after_overlay(app: &AppHandle) {
     };
     let app = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(FRAME_DELAY_MS));
         for l in locked_labels {
             let _ = crate::panel::set_panel_mode(app.clone(), l, "locked".into());
         }
@@ -302,7 +313,7 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
     std::thread::spawn(move || {
         if let Some(win) = app.get_webview_window("overlay") {
             let _ = win.close();
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::thread::sleep(std::time::Duration::from_millis(FRAME_DELAY_MS));
         }
 
         // 清理上一次的截圖暫存檔
@@ -319,7 +330,7 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
         if let Some(settings_win) = app.get_webview_window("settings") {
             let _ = settings_win.hide();
         }
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::thread::sleep(std::time::Duration::from_millis(FOREGROUND_SWITCH_MS));
 
         // 第二步：偵測當前前景視窗的 URL（現在應該是瀏覽器了）
         let detected_url = detect_browser_url();
@@ -348,7 +359,7 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
             let _ = win.hide();
         }
         // 等待視窗完全隱藏（包含 DWM 動畫）
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        std::thread::sleep(std::time::Duration::from_millis(WINDOW_HIDE_ANIMATION_MS));
 
         let screenshot_path = match capture_screen_to_file() {
             Ok(p) => p,
@@ -456,7 +467,7 @@ pub fn capture_region(
         let label = label.clone();
         move || {
             // 等待一幀讓 overlay 真正消失
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::thread::sleep(std::time::Duration::from_millis(FRAME_DELAY_MS));
 
             println!(
                 "[WisdomBoard] 擷取區域: ({}, {}) {}x{} (scale: {})",
@@ -509,7 +520,7 @@ pub fn capture_region(
                         let a = app.clone();
                         let l = label.clone();
                         std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            std::thread::sleep(std::time::Duration::from_millis(CAPTURE_PANEL_MODE_DELAY_MS));
                             let _ = crate::panel::set_panel_mode(a, l, "locked".into());
                         });
                     }

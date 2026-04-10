@@ -13,6 +13,9 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt;
 
+/// 啟動時延遲多久才恢復面板（等 Tauri 視窗系統就緒）
+const STARTUP_RESTORE_DELAY_MS: u64 = 500;
+
 /// 開啟或聚焦設定視窗（供 hotkey 模組呼叫）
 pub fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("settings") {
@@ -111,7 +114,7 @@ pub fn run() {
                     let handle = app.handle().clone();
                     // 延遲恢復，確保視窗系統就緒
                     std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        std::thread::sleep(std::time::Duration::from_millis(STARTUP_RESTORE_DELAY_MS));
                         panel::restore_panels(&handle, config.panels);
                     });
                 }
@@ -149,7 +152,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            panel::create_panel,
             panel::create_url_panel,
             panel::create_url_panel_at,
             panel::close_panel,

@@ -77,9 +77,29 @@ fn unlock_window(hwnd: HWND) {
 }
 
 static PANEL_COUNT: AtomicU32 = AtomicU32::new(0);
-/// debounce：記錄上次 Resized 觸發 auto_save 的時間戳（毫秒）
-static LAST_RESIZE_SAVE: AtomicU64 = AtomicU64::new(0);
-const RESIZE_DEBOUNCE_MS: u64 = 500;
+/// debounce：記錄上次 Moved/Resized 觸發 auto_save 的時間戳（毫秒）
+static LAST_SAVE_TICK: AtomicU64 = AtomicU64::new(0);
+/// Moved/Resized 事件在停止 500ms 後才寫入持久化
+const SAVE_DEBOUNCE_MS: u64 = 500;
+/// 恢復面板時延遲套用 mode（等 WebView2 初次渲染完成才套用 locked/passthrough 的視窗屬性）
+const RESTORE_MODE_DELAY_MS: u64 = 300;
+
+/// 通用 debounce：只在停止觸發 SAVE_DEBOUNCE_MS 後才執行 auto_save
+fn debounced_auto_save(app: &AppHandle) {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    LAST_SAVE_TICK.store(now_ms, Ordering::Relaxed);
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(SAVE_DEBOUNCE_MS));
+        let saved_at = LAST_SAVE_TICK.load(Ordering::Relaxed);
+        if saved_at == now_ms {
+            crate::persistence::auto_save(&app_clone);
+        }
+    });
+}
 
 pub fn next_panel_id() -> String {
     let ts = SystemTime::now()
@@ -126,6 +146,7 @@ pub fn handle_panel_event(app: &AppHandle, label: &str, event: &tauri::WindowEve
                     p.y = pos.y as f64 / scale;
                 }
             };
+            debounced_auto_save(app);
         }
         tauri::WindowEvent::Resized(size) => {
             let scale = get_scale(app);
@@ -136,20 +157,7 @@ pub fn handle_panel_event(app: &AppHandle, label: &str, event: &tauri::WindowEve
                     p.height = size.height as f64 / scale;
                 }
             };
-            // debounce：調整大小期間高頻觸發，只在停止調整 500ms 後才寫入
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            LAST_RESIZE_SAVE.store(now_ms, Ordering::Relaxed);
-            let app_clone = app.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(RESIZE_DEBOUNCE_MS));
-                let saved_at = LAST_RESIZE_SAVE.load(Ordering::Relaxed);
-                if saved_at == now_ms {
-                    crate::persistence::auto_save(&app_clone);
-                }
-            });
+            debounced_auto_save(app);
         }
         _ => {}
     }
@@ -356,73 +364,6 @@ fn build_url_panel_async(
 }
 
 #[tauri::command]
-pub fn create_panel(app: AppHandle) -> Result<String, String> {
-    let label = next_panel_id();
-
-    {
-        let state = app.state::<ManagedState>();
-        let mut guard = state.lock().map_err(|e| format!("state lock 失敗: {e}"))?;
-        guard.panels.insert(
-            label.clone(),
-            PanelConfig {
-                label: label.clone(),
-                panel_type: PanelType::Capture,
-                url: None,
-                x: 0.0,
-                y: 0.0,
-                width: 400.0,
-                height: 300.0,
-                mode: "locked".into(),
-                zoom: 1.0,
-                screenshot_path: None,
-            },
-        );
-        drop(guard);
-    }
-
-    std::thread::spawn({
-        let app = app.clone();
-        let label = label.clone();
-        move || {
-            let url = tauri::WebviewUrl::App("src/panel.html".into());
-            let builder = tauri::WebviewWindowBuilder::new(&app, &label, url)
-                .title("WisdomBoard Panel".to_string())
-                .inner_size(400.0, 300.0)
-                .decorations(false)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .transparent(false);
-
-            match builder.build() {
-                Ok(win) => {
-                    set_square_corners(&win);
-                    let app_handle = app.clone();
-                    let panel_label = label.clone();
-                    win.on_window_event(move |event| {
-                        handle_panel_event(&app_handle, &panel_label, event);
-                    });
-                    crate::persistence::auto_save(&app);
-                    println!("[WisdomBoard] 面板 {} 已建立", label);
-                    let _ = app.emit("panel-created", serde_json::json!({
-                        "label": &label, "type": "capture", "url": null, "mode": "locked"
-                    }));
-                }
-                Err(e) => {
-                    println!("[WisdomBoard] 面板 build() FAILED: {e}");
-                    let state = app.state::<ManagedState>();
-                    if let Ok(mut guard) = state.lock() {
-                        guard.panels.remove(&label);
-                    };
-                }
-            }
-        }
-    });
-
-    println!("[WisdomBoard] 面板 {} 建立中", label);
-    Ok(label)
-}
-
-#[tauri::command]
 pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(), String> {
     let window = app
         .get_webview_window(&label)
@@ -439,8 +380,8 @@ pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(),
 
     // 三態模式：
     // "edit"        → 置頂 + 可拖移調整
-    // "passthrough"  → 置頂 + 可操作面板內容
-    // "locked"       → 置底 + 完全不可互動（WS_DISABLED + WS_EX_TRANSPARENT）
+    // "passthrough" → 置底 + 可操作面板內容（WS_EX_NOACTIVATE 防止跳到前面）
+    // "locked"      → 置底 + 滑鼠穿透（WS_EX_TRANSPARENT + WS_EX_LAYERED，不用 WS_DISABLED 以免 WebView2 停止渲染）
     match mode.as_str() {
         "edit" => {
             if let Ok(raw) = window.hwnd() {
@@ -614,7 +555,7 @@ pub fn restore_panels(app: &AppHandle, configs: Vec<PanelConfig>) {
                 let l = label;
                 let m = config.mode.clone();
                 std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    std::thread::sleep(std::time::Duration::from_millis(RESTORE_MODE_DELAY_MS));
                     let _ = set_panel_mode(a, l, m);
                 });
             }
