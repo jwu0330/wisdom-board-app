@@ -4,18 +4,26 @@ use tauri::{AppHandle, Emitter, Manager};
 use windows::Win32::Foundation::HWND;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 移除 Windows 11 視窗圓角
+/// 移除 Windows 11 視窗圓角 + 陰影
 pub fn set_square_corners(win: &tauri::WebviewWindow) {
     if let Ok(raw) = win.hwnd() {
         let hwnd = HWND(raw.0 as isize);
         unsafe {
-            use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE};
-            // 直角（不修改 window style，避免 WebView 客戶區錯位）
+            use windows::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+            // 直角
             let preference: u32 = 1; // DWMWCP_DONOTROUND
             let _ = DwmSetWindowAttribute(
                 hwnd,
-                DWMWA_WINDOW_CORNER_PREFERENCE,
+                windows::Win32::Graphics::Dwm::DWMWA_WINDOW_CORNER_PREFERENCE,
                 &preference as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+            // 關閉 DWM 陰影（DWMWA_NCRENDERING_POLICY = 2, DWMNCRP_DISABLED = 1）
+            let policy: u32 = 1;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(2),
+                &policy as *const u32 as *const _,
                 std::mem::size_of::<u32>() as u32,
             );
         }
