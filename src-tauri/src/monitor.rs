@@ -207,3 +207,84 @@ pub fn compute_relative_position(
         / monitor.physical_size.1 as f64;
     (rel_x, rel_y)
 }
+
+/// 從螢幕指紋 + 相對比例還原絕對邏輯座標(規格書 §5.4 恢復流程)
+///
+/// 回傳以主螢幕 scale 為基準的邏輯虛擬桌面座標(與 `PanelConfig.x/y` 同義)。
+pub fn resolve_from_relative(
+    monitor: &MonitorInfo,
+    relative_x: f64,
+    relative_y: f64,
+    primary_scale: f64,
+) -> (f64, f64) {
+    let phys_x = monitor.physical_position.0 as f64
+        + relative_x * monitor.physical_size.0 as f64;
+    let phys_y = monitor.physical_position.1 as f64
+        + relative_y * monitor.physical_size.1 as f64;
+    (phys_x / primary_scale, phys_y / primary_scale)
+}
+
+/// 將面板 clamp 到至少與一個螢幕有交集的位置(規格書 §8.2)
+///
+/// 輸入/回傳:以主螢幕 scale 為基準的邏輯座標。
+///
+/// 規則:
+/// 1. 若面板與任一螢幕有交集 → 原封不動回傳,`was_clamped = false`
+/// 2. 否則 → 移動到最近螢幕的左上角 + 邊距,`was_clamped = true`
+///
+/// 效能:O(n) 其中 n = 螢幕數(通常 1~3),只在 restore 時呼叫。
+pub fn clamp_rect_to_monitors(
+    monitors: &[MonitorInfo],
+    primary_scale: f64,
+    logical_x: f64,
+    logical_y: f64,
+    logical_w: f64,
+    logical_h: f64,
+) -> (f64, f64, bool) {
+    if monitors.is_empty() {
+        return (logical_x, logical_y, false);
+    }
+
+    // 轉為物理座標判定
+    let px = (logical_x * primary_scale) as i32;
+    let py = (logical_y * primary_scale) as i32;
+    let pw = (logical_w * primary_scale).max(1.0) as i32;
+    let ph = (logical_h * primary_scale).max(1.0) as i32;
+
+    // 是否與任一螢幕有矩形交集
+    let intersects = monitors.iter().any(|m| {
+        let (mx, my) = m.physical_position;
+        let (mw, mh) = m.physical_size;
+        let mx2 = mx + mw as i32;
+        let my2 = my + mh as i32;
+        px < mx2 && (px + pw) > mx && py < my2 && (py + ph) > my
+    });
+
+    if intersects {
+        return (logical_x, logical_y, false);
+    }
+
+    // 面板完全在所有螢幕外 → 找中心點最近的螢幕
+    let cx = px + pw / 2;
+    let cy = py + ph / 2;
+    let nearest = monitors
+        .iter()
+        .min_by_key(|m| {
+            let (mx, my) = m.physical_position;
+            let (mw, mh) = m.physical_size;
+            let mcx = mx + (mw / 2) as i32;
+            let mcy = my + (mh / 2) as i32;
+            let dx = (mcx - cx) as i64;
+            let dy = (mcy - cy) as i64;
+            dx * dx + dy * dy
+        })
+        .unwrap(); // 上面已檢查非空
+
+    // 放到最近螢幕的左上角 + 40px 物理邊距(避免貼齊邊角)
+    let margin: i32 = 40;
+    let new_px = nearest.physical_position.0 + margin;
+    let new_py = nearest.physical_position.1 + margin;
+    let new_x = new_px as f64 / primary_scale;
+    let new_y = new_py as f64 / primary_scale;
+    (new_x, new_y, true)
+}

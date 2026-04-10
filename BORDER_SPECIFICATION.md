@@ -1,9 +1,11 @@
 # 📐 邊框定義與螢幕模型規格書 (Border Definition & Screen Model Specification)
 
-**版本：** v0.1.0-draft
+**版本：** v0.2.0(Phase 1+2+3+5 落地後)
 **日期：** 2026-04-10
 **適用專案：** WisdomBoard v0.3.0+
 **前置文件：** SPECIFICATION.md, DEVELOPMENT.md
+
+**實作狀態速查:** 見本文件 §10 後的「附錄 A」。規格書中若某章節標註為「不在 v0.4 範圍」,代表已審視過但基於「效能優先」原則刻意延後。
 
 ---
 
@@ -834,16 +836,37 @@ pub enum PanelType {
 
 ## 附錄 A: 現有程式碼與本規格的差距
 
-| 項目 | 現狀 | 本規格建議 | 優先級 |
-|------|------|-----------|--------|
-| DPI 處理 | 僅用主螢幕 scale_factor | 改用面板歸屬螢幕的 scale_factor | 高 |
-| 螢幕識別 | 無（不追蹤螢幕） | 引入 monitor_fingerprint | 中 |
-| 座標持久化 | 虛擬桌面絕對座標 | 增加螢幕相對座標 | 中 |
-| 螢幕斷開處理 | 無（交給 OS） | 記錄遷移狀態 + 自動恢復 | 低 |
-| Overlay 多螢幕 | 僅主螢幕 | 待設計（§8.7） | 低 |
-| DWM 殘留邊框 | 未處理 | 使用 EXTENDED_FRAME_BOUNDS | 中 |
-| 面板最小尺寸 | 無限制 | 最小 50 邏輯像素 | 高 |
-| Type C (App Live) | 僅保留欄位 | Phase 2 實作 | 低 |
+**最後更新:** 2026-04-10(v0.4 Phase 1+2+3+5 落地後)
+
+| 項目 | 現狀(落地後) | 狀態 |
+|------|------|--------|
+| DPI 處理 | `monitor::scale_for_physical_point` 使用面板所屬螢幕 scale | **已實作 (Phase 1)** |
+| 單一事實來源 | `monitor.rs` 為唯一的螢幕資訊入口;其他模組禁止直接呼叫 `primary_monitor()` / `SM_CXSCREEN` | **已實作 (Phase 1)** |
+| 螢幕識別 | `monitor::compute_fingerprint`(name + size + scale hash) | **已實作 (Phase 2)** |
+| 座標持久化 | `PanelConfig` 新增 `monitor_fingerprint` + `monitor_relative_x/y` + `is_migrated`,全部 `#[serde(default)]` 向下相容 | **已實作 (Phase 2)** |
+| Moved 事件跨螢幕追蹤 | `Moved` handler 自動用歸屬螢幕 scale 轉換並更新 fingerprint/relative | **已實作 (Phase 2)** |
+| fingerprint restore | `restore_panels` 先查 fingerprint → 若命中則用 relative 重算絕對座標 → fallback 到原絕對座標 | **已實作 (Phase 3)** |
+| 面板超出螢幕 clamp | `monitor::clamp_rect_to_monitors`,若面板與所有螢幕無交集則移到最近螢幕 | **已實作 (Phase 3)** |
+| 面板最小尺寸 | `panel::MIN_PANEL_SIZE = 50.0`,前後端對齊 | **已實作 (Phase 5)** |
+| 螢幕斷開處理 | 被動:OS 自動搬移 → `Moved` 事件自動更新 fingerprint | **被動處理(刻意不做主動 watcher)** |
+| Overlay 多螢幕 | 僅主螢幕 | **不在 v0.4 範圍(§8.7)** |
+| DWM 殘留邊框 | 未處理 | **不在 v0.4 範圍(目前無消費者)** |
+| 截圖快照一致性 | 未處理 | **不在 v0.4 範圍(< 2 秒邊界情境)** |
+| Type C (App Live) | 僅保留 enum 空位 | **不在 v0.4 範圍** |
+
+### 設計決策:為何不實作主動螢幕狀態 watcher
+
+規格書 §1.4 建議監聽 `WM_DISPLAYCHANGE` / `WM_DPICHANGED` 並主動協調所有面板。經評估後**刻意不實作**,原因:
+
+1. **效能優先**:會引入一個常駐 message-only window 執行緒、~1MB 記憶體、~200 LOC 複雜度。雖然閒置 CPU 為 0,但複雜度對專案「效能最優先」的原則不利。
+2. **使用頻率極低**:絕大多數桌面使用情境下,螢幕配置一次設定後不改動。熱插拔發生時使用者通常也會重啟應用。
+3. **被動處理已覆蓋大部分正確性**:
+   - **螢幕拔掉**:Windows 自動將視窗搬到剩下的螢幕 → Tauri `Moved` 事件觸發 → Phase 2 的 handler 自動更新 `monitor_fingerprint` 與 `monitor_relative_x/y`。這等同於「軟遷移」。
+   - **螢幕插回來**:面板留在新位置。使用者若想回到原位,重啟 app 即可 — `restore_panels` 會用原 fingerprint 找回螢幕(Phase 3 已支援)。
+   - **DPI 變更**:`Moved` 事件同時觸發,自動用新螢幕 scale 重新計算邏輯座標。
+4. **簡單勝過聰明**:被動處理 = 0 新執行緒、0 新 LOC、0 新狀態機。符合最小驚訝原則。
+
+若未來真的需要主動 watcher(例如「螢幕斷開時面板淡出動畫」這類即時 UX 需求),再另開計畫實作,屆時 `PanelConfig.is_migrated` 欄位已就位可直接使用。
 
 ---
 

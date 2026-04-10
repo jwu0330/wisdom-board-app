@@ -83,6 +83,10 @@ static LAST_SAVE_TICK: AtomicU64 = AtomicU64::new(0);
 const SAVE_DEBOUNCE_MS: u64 = 500;
 /// 恢復面板時延遲套用 mode（等 WebView2 初次渲染完成才套用 locked/passthrough 的視窗屬性）
 const RESTORE_MODE_DELAY_MS: u64 = 300;
+/// 面板最小尺寸(邏輯像素,對應規格書 §8.1 建議值)
+///
+/// 小於此值的建立請求會被拒絕。前端 overlay 的框選最小尺寸應與此對齊。
+pub const MIN_PANEL_SIZE: f64 = 50.0;
 
 /// 通用 debounce：只在停止觸發 SAVE_DEBOUNCE_MS 後才執行 auto_save
 fn debounced_auto_save(app: &AppHandle) {
@@ -362,6 +366,14 @@ pub fn create_url_panel_at(
     url.parse::<url::Url>()
         .map_err(|e: url::ParseError| format!("網址格式錯誤: {e}"))?;
 
+    // 規格書 §8.1:面板最小尺寸檢查
+    if width < MIN_PANEL_SIZE || height < MIN_PANEL_SIZE {
+        return Err(format!(
+            "面板尺寸過小(最小 {}×{} 邏輯像素): {:.0}×{:.0}",
+            MIN_PANEL_SIZE, MIN_PANEL_SIZE, width, height
+        ));
+    }
+
     let config = make_panel_config(
         &app,
         label.clone(),
@@ -611,8 +623,57 @@ pub fn set_mode(app: AppHandle, mode: String) -> Result<(), String> {
 }
 
 /// 從持久化設定恢復面板（啟動時呼叫）
+/// 恢復持久化的面板(規格書 §5.4 恢復流程)
+///
+/// 處理順序(對每個面板):
+/// 1. 若有 `monitor_fingerprint` 且對應螢幕仍連線 → 以 `monitor_relative_x/y` 重算絕對座標
+/// 2. 否則保留原絕對座標
+/// 3. 呼叫 `clamp_rect_to_monitors` 確保面板至少與一個螢幕有交集(規格書 §8.2)
+/// 4. 若 clamp 生效,標記 `is_migrated = true`
+/// 5. 建立視窗
+///
+/// 效能:螢幕列舉只執行一次,所有面板共用;對每個面板做 O(螢幕數)的查找,可忽略。
 pub fn restore_panels(app: &AppHandle, configs: Vec<PanelConfig>) {
-    for config in configs {
+    let monitors = crate::monitor::enumerate(app);
+    let primary_scale = crate::monitor::primary_scale_factor(app);
+
+    for mut config in configs {
+        // Step 1: fingerprint 匹配 → 用 relative 重算絕對座標
+        if let Some(ref fp) = config.monitor_fingerprint {
+            if let Some(owning) = crate::monitor::find_by_fingerprint(&monitors, fp) {
+                if let (Some(rx), Some(ry)) =
+                    (config.monitor_relative_x, config.monitor_relative_y)
+                {
+                    let (new_x, new_y) = crate::monitor::resolve_from_relative(
+                        owning, rx, ry, primary_scale,
+                    );
+                    config.x = new_x;
+                    config.y = new_y;
+                    // fingerprint 還在 → 不算遷移
+                    config.is_migrated = false;
+                }
+            }
+        }
+
+        // Step 2: clamp 到螢幕內,避免面板落在虛擬桌面外(規格書 §8.2)
+        let (new_x, new_y, was_clamped) = crate::monitor::clamp_rect_to_monitors(
+            &monitors,
+            primary_scale,
+            config.x,
+            config.y,
+            config.width,
+            config.height,
+        );
+        if was_clamped {
+            println!(
+                "[WisdomBoard] 面板 {} 超出螢幕,已 clamp 至最近螢幕: ({:.0},{:.0}) → ({:.0},{:.0})",
+                config.label, config.x, config.y, new_x, new_y
+            );
+            config.x = new_x;
+            config.y = new_y;
+            config.is_migrated = true;
+        }
+
         let result = match config.panel_type {
             PanelType::Url => {
                 if let Some(ref url) = config.url {

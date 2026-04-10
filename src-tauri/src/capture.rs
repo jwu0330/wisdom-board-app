@@ -433,8 +433,12 @@ pub fn capture_region(
     app: AppHandle,
     x: f64, y: f64, width: f64, height: f64,
 ) -> Result<String, String> {
-    if width <= 0.0 || height <= 0.0 {
-        return Err(format!("無效的擷取尺寸: {}x{}", width, height));
+    // 規格書 §8.1:最小尺寸檢查(使用 panel 模組的常數保持一致性)
+    if width < crate::panel::MIN_PANEL_SIZE || height < crate::panel::MIN_PANEL_SIZE {
+        return Err(format!(
+            "框選區域過小(最小 {}×{} 邏輯像素): {:.0}×{:.0}",
+            crate::panel::MIN_PANEL_SIZE, crate::panel::MIN_PANEL_SIZE, width, height
+        ));
     }
     // 目前 overlay 僅覆蓋主螢幕,因此框選座標用主螢幕 scale 轉換。
     // 規格書 §7.3、§8.7:跨螢幕 overlay 是 Phase 5 議題。

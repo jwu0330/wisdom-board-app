@@ -159,9 +159,10 @@
           dragging = false;
           var r = rect(e.clientX, e.clientY);
 
-          if (r.w < 50 || r.h < 30) {
+          // 規格書 §8.1:最小面板尺寸,與 Rust 端 MIN_PANEL_SIZE 對齊
+          if (r.w < 50 || r.h < 50) {
             hint.style.display = "block";
-            hint.innerHTML = "範圍太小，請重新拖拉<small>按 ESC 取消</small>";
+            hint.innerHTML = "範圍太小（至少 50×50）<small>按 ESC 取消</small>";
             sel.style.display = "none";
             sz.style.display = "none";
             return;
