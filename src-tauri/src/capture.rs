@@ -103,97 +103,109 @@ fn detect_browser_url() -> Option<String> {
     }
 }
 
-/// 擷取全螢幕截圖並存為 BMP 暫存檔
-pub fn capture_screen_to_file() -> Result<String, String> {
-    unsafe {
-        let w = GetSystemMetrics(SM_CXSCREEN);
-        let h = GetSystemMetrics(SM_CYSCREEN);
+/// 將像素資料寫入 BMP 檔案（共用邏輯，避免重複）
+fn write_bmp(pixels: &[u8], w: i32, h: i32, path: &std::path::Path) -> Result<(), String> {
+    let row_bytes = ((w as u32 * 3 + 3) & !3) as usize;
+    let img_size = row_bytes * h as usize;
+    let file_size = 54 + img_size;
+    let mut f = std::fs::File::create(path).map_err(|e| format!("建立檔案失敗: {e}"))?;
+    use std::io::Write;
+    f.write_all(b"BM").map_err(|e| format!("{e}"))?;
+    f.write_all(&(file_size as u32).to_le_bytes()).map_err(|e| format!("{e}"))?;
+    f.write_all(&0u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
+    f.write_all(&54u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
+    f.write_all(&40u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
+    f.write_all(&w.to_le_bytes()).map_err(|e| format!("{e}"))?;
+    f.write_all(&(-h).to_le_bytes()).map_err(|e| format!("{e}"))?;
+    f.write_all(&1u16.to_le_bytes()).map_err(|e| format!("{e}"))?;
+    f.write_all(&24u16.to_le_bytes()).map_err(|e| format!("{e}"))?;
+    f.write_all(&0u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
+    f.write_all(&(img_size as u32).to_le_bytes()).map_err(|e| format!("{e}"))?;
+    f.write_all(&[0u8; 16]).map_err(|e| format!("{e}"))?;
+    f.write_all(pixels).map_err(|e| format!("{e}"))?;
+    Ok(())
+}
 
-        let screen_dc = GetDC(HWND(0));
-        if screen_dc.is_invalid() {
-            return Err("GetDC 失敗".into());
-        }
-        let mem_dc = CreateCompatibleDC(screen_dc);
-        let bmp = CreateCompatibleBitmap(screen_dc, w, h);
-        let old = SelectObject(mem_dc, bmp);
-        if old.0 as isize == -1 {
-            let _ = DeleteObject(bmp);
-            let _ = DeleteDC(mem_dc);
-            ReleaseDC(HWND(0), screen_dc);
-            return Err("SelectObject 失敗".into());
-        }
+/// GDI 擷取螢幕指定區域的像素資料
+unsafe fn capture_gdi_pixels(src_x: i32, src_y: i32, w: i32, h: i32) -> Result<Vec<u8>, String> {
+    let screen_dc = GetDC(HWND(0));
+    if screen_dc.is_invalid() {
+        return Err("GetDC 失敗".into());
+    }
+    let mem_dc = CreateCompatibleDC(screen_dc);
+    let bmp = CreateCompatibleBitmap(screen_dc, w, h);
+    let old = SelectObject(mem_dc, bmp);
+    if old.0 as isize == -1 {
+        let _ = DeleteObject(bmp);
+        let _ = DeleteDC(mem_dc);
+        ReleaseDC(HWND(0), screen_dc);
+        return Err("SelectObject 失敗".into());
+    }
 
-        let blt_result = BitBlt(mem_dc, 0, 0, w, h, screen_dc, 0, 0, SRCCOPY);
-        if let Err(e) = blt_result {
-            SelectObject(mem_dc, old);
-            let _ = DeleteObject(bmp);
-            let _ = DeleteDC(mem_dc);
-            ReleaseDC(HWND(0), screen_dc);
-            return Err(format!("BitBlt 失敗: {e}"));
-        }
-
-        let row_bytes = ((w as u32 * 3 + 3) & !3) as usize;
-        let img_size = row_bytes * h as usize;
-        let mut pixels = vec![0u8; img_size];
-
-        let mut bi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w,
-                biHeight: -h,
-                biPlanes: 1,
-                biBitCount: 24,
-                biCompression: BI_RGB.0 as u32,
-                biSizeImage: img_size as u32,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let scan_lines = GetDIBits(
-            mem_dc, bmp, 0, h as u32,
-            Some(pixels.as_mut_ptr() as *mut _),
-            &mut bi, DIB_RGB_COLORS,
-        );
-        if scan_lines == 0 {
-            SelectObject(mem_dc, old);
-            let _ = DeleteObject(bmp);
-            let _ = DeleteDC(mem_dc);
-            ReleaseDC(HWND(0), screen_dc);
-            return Err("GetDIBits 失敗".into());
-        }
-
+    let blt_result = BitBlt(mem_dc, 0, 0, w, h, screen_dc, src_x, src_y, SRCCOPY);
+    if let Err(e) = blt_result {
         SelectObject(mem_dc, old);
         let _ = DeleteObject(bmp);
         let _ = DeleteDC(mem_dc);
         ReleaseDC(HWND(0), screen_dc);
-
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let path = std::env::temp_dir().join(format!("wisdomboard_screenshot_{}.bmp", ts));
-        let file_size = 54 + img_size;
-        let mut f = std::fs::File::create(&path).map_err(|e| format!("建立檔案失敗: {e}"))?;
-        use std::io::Write;
-        f.write_all(b"BM").map_err(|e| format!("{e}"))?;
-        f.write_all(&(file_size as u32).to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&0u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&54u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&40u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&w.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&(-h).to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&1u16.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&24u16.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&0u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&(img_size as u32).to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&[0u8; 16]).map_err(|e| format!("{e}"))?;
-        f.write_all(&pixels).map_err(|e| format!("{e}"))?;
-
-        let path_str = path.to_string_lossy().to_string();
-        println!("[WisdomBoard] 螢幕截圖已存到: {} ({}x{}, {} bytes)", path_str, w, h, file_size);
-        Ok(path_str)
+        return Err(format!("BitBlt 失敗: {e}"));
     }
+
+    let row_bytes = ((w as u32 * 3 + 3) & !3) as usize;
+    let img_size = row_bytes * h as usize;
+    let mut pixels = vec![0u8; img_size];
+
+    let mut bi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 24,
+            biCompression: BI_RGB.0 as u32,
+            biSizeImage: img_size as u32,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let scan_lines = GetDIBits(
+        mem_dc, bmp, 0, h as u32,
+        Some(pixels.as_mut_ptr() as *mut _),
+        &mut bi, DIB_RGB_COLORS,
+    );
+    if scan_lines == 0 {
+        SelectObject(mem_dc, old);
+        let _ = DeleteObject(bmp);
+        let _ = DeleteDC(mem_dc);
+        ReleaseDC(HWND(0), screen_dc);
+        return Err("GetDIBits 失敗".into());
+    }
+
+    SelectObject(mem_dc, old);
+    let _ = DeleteObject(bmp);
+    let _ = DeleteDC(mem_dc);
+    ReleaseDC(HWND(0), screen_dc);
+    Ok(pixels)
+}
+
+/// 擷取全螢幕截圖並存為 BMP 暫存檔
+pub fn capture_screen_to_file() -> Result<String, String> {
+    let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    let pixels = unsafe { capture_gdi_pixels(0, 0, w, h)? };
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let path = std::env::temp_dir().join(format!("wisdomboard_screenshot_{}.bmp", ts));
+    write_bmp(&pixels, w, h, &path)?;
+
+    let path_str = path.to_string_lossy().to_string();
+    let row_bytes = ((w as u32 * 3 + 3) & !3) as usize;
+    let file_size = 54 + row_bytes * h as usize;
+    println!("[WisdomBoard] 螢幕截圖已存到: {} ({}x{}, {} bytes)", path_str, w, h, file_size);
+    Ok(path_str)
 }
 
 /// 直接用 GDI 擷取螢幕指定區域並存為 BMP 暫存檔
@@ -201,92 +213,20 @@ pub fn capture_region_to_file(x: i32, y: i32, w: i32, h: i32, label: &str) -> Re
     if w <= 0 || h <= 0 {
         return Err(format!("無效的擷取尺寸: {}x{}", w, h));
     }
-    unsafe {
-        let screen_dc = GetDC(HWND(0));
-        if screen_dc.is_invalid() {
-            return Err("GetDC 失敗".into());
-        }
-        let mem_dc = CreateCompatibleDC(screen_dc);
-        let bmp = CreateCompatibleBitmap(screen_dc, w, h);
-        let old = SelectObject(mem_dc, bmp);
-        if old.0 as isize == -1 {
-            let _ = DeleteObject(bmp);
-            let _ = DeleteDC(mem_dc);
-            ReleaseDC(HWND(0), screen_dc);
-            return Err("SelectObject 失敗".into());
-        }
+    let pixels = unsafe { capture_gdi_pixels(x, y, w, h)? };
 
-        let blt_result = BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, SRCCOPY);
-        if let Err(e) = blt_result {
-            SelectObject(mem_dc, old);
-            let _ = DeleteObject(bmp);
-            let _ = DeleteDC(mem_dc);
-            ReleaseDC(HWND(0), screen_dc);
-            return Err(format!("BitBlt 失敗: {e}"));
-        }
+    let safe_label: String = label.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let filename = format!("wisdomboard_panel_{}.bmp", safe_label);
+    let path = std::env::temp_dir().join(&filename);
+    write_bmp(&pixels, w, h, &path)?;
 
-        let row_bytes = ((w as u32 * 3 + 3) & !3) as usize;
-        let img_size = row_bytes * h as usize;
-        let mut pixels = vec![0u8; img_size];
-
-        let mut bi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w,
-                biHeight: -h,
-                biPlanes: 1,
-                biBitCount: 24,
-                biCompression: BI_RGB.0 as u32,
-                biSizeImage: img_size as u32,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let scan_lines = GetDIBits(
-            mem_dc, bmp, 0, h as u32,
-            Some(pixels.as_mut_ptr() as *mut _),
-            &mut bi, DIB_RGB_COLORS,
-        );
-        if scan_lines == 0 {
-            SelectObject(mem_dc, old);
-            let _ = DeleteObject(bmp);
-            let _ = DeleteDC(mem_dc);
-            ReleaseDC(HWND(0), screen_dc);
-            return Err("GetDIBits 失敗".into());
-        }
-
-        SelectObject(mem_dc, old);
-        let _ = DeleteObject(bmp);
-        let _ = DeleteDC(mem_dc);
-        ReleaseDC(HWND(0), screen_dc);
-
-        let safe_label: String = label.chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-            .collect();
-        let filename = format!("wisdomboard_panel_{}.bmp", safe_label);
-        let path = std::env::temp_dir().join(&filename);
-        let file_size = 54 + img_size;
-        let mut f = std::fs::File::create(&path).map_err(|e| format!("建立檔案失敗: {e}"))?;
-        use std::io::Write;
-        f.write_all(b"BM").map_err(|e| format!("{e}"))?;
-        f.write_all(&(file_size as u32).to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&0u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&54u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&40u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&w.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&(-h).to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&1u16.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&24u16.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&0u32.to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&(img_size as u32).to_le_bytes()).map_err(|e| format!("{e}"))?;
-        f.write_all(&[0u8; 16]).map_err(|e| format!("{e}"))?;
-        f.write_all(&pixels).map_err(|e| format!("{e}"))?;
-
-        let path_str = path.to_string_lossy().to_string();
-        println!("[WisdomBoard] 區域截圖已存到: {} ({}x{} @ {},{}, {} bytes)", path_str, w, h, x, y, file_size);
-        Ok(path_str)
-    }
+    let path_str = path.to_string_lossy().to_string();
+    let row_bytes = ((w as u32 * 3 + 3) & !3) as usize;
+    let file_size = 54 + row_bytes * h as usize;
+    println!("[WisdomBoard] 區域截圖已存到: {} ({}x{} @ {},{}, {} bytes)", path_str, w, h, x, y, file_size);
+    Ok(path_str)
 }
 
 #[tauri::command]
@@ -335,12 +275,12 @@ pub fn get_panel_screenshot_base64(app: AppHandle, label: String) -> Result<Stri
     Ok(format!("data:image/bmp;base64,{}", b64))
 }
 
-/// 取得並清除偵測到的瀏覽器 URL（用完即丟）
+/// 取得偵測到的瀏覽器 URL（可多次讀取；URL 在下次 open_capture_overlay 時自動清除）
 #[tauri::command]
 pub fn get_detected_url(app: AppHandle) -> Option<String> {
     let state = app.state::<crate::state::ManagedState>();
-    let mut guard = state.lock().ok()?;
-    guard.detected_url.take()
+    let guard = state.lock().ok()?;
+    guard.detected_url.clone()
 }
 
 /// overlay 關閉或 build 失敗時，恢復所有面板並重新套用 locked 模式
@@ -560,8 +500,6 @@ pub fn capture_region(
                             height: logical_h,
                             mode: "locked".into(),
                             zoom: 1.0,
-                            target_hwnd: None,
-                            source_rect: None,
                             screenshot_path: Some(screenshot_path.clone()),
                         },
                     );
@@ -631,6 +569,8 @@ pub fn run_debug_tests() -> Result<String, String> {
         Ok(path) => {
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             report.push_str(&format!("2. 截圖存檔: OK\n   路徑: {}\n   大小: {} bytes\n", path, size));
+            // 清理 debug 測試產生的截圖暫存檔
+            let _ = std::fs::remove_file(&path);
         }
         Err(e) => report.push_str(&format!("2. 截圖存檔: FAIL: {}\n", e)),
     }

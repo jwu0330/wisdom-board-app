@@ -275,6 +275,7 @@
       urlIn.onkeydown = (e) => { if (e.key === "Enter" && urlIn.value.trim()) doCreateUrl(); };
       document.getElementById("url-no").onclick = () => { urlArea.classList.remove("show"); urlIn.value = ""; };
 
+      let isSliding = false; // 防止 re-render 時銷毀正在拖曳的 slider
       let creatingUrl = false;
       async function doCreateUrl() {
         if (creatingUrl) return;
@@ -319,6 +320,7 @@
 
       function render() {
         document.getElementById("ct").textContent = "面板：" + panels.length;
+        if (isSliding) return; // 正在拖曳 slider 時不重建 DOM，避免中斷操作
         if (!panels.length) { listEl.innerHTML = '<div class="empty">尚未建立面板</div>'; return; }
         listEl.innerHTML = panels.map((p, i) => {
           const isUrl = p.type === 'url';
@@ -380,6 +382,14 @@
           }
           render();
         }
+      });
+
+      // slider 拖曳狀態追蹤：防止 render() 中斷拖曳
+      listEl.addEventListener("mousedown", (e) => {
+        if (e.target.matches('[data-action="zoom"]')) isSliding = true;
+      });
+      document.addEventListener("mouseup", () => {
+        if (isSliding) { isSliding = false; render(); }
       });
 
       listEl.addEventListener("input", async (e) => {

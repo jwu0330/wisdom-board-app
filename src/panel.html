@@ -23,7 +23,7 @@
       }
       body.locked #drag { display:none; }
 
-      /* 工具列：只在編輯模式 hover 時出現 */
+      /* 工具列：只在編輯模式 hover 時出現（passthrough 不顯示） */
       #bar {
         position:absolute; bottom:6px; left:50%; transform:translateX(-50%);
         display:flex; gap:1px; background:#fff; border:1px solid #ddd;
@@ -31,6 +31,7 @@
         z-index:30;
       }
       body.edit:hover #bar { opacity:1; pointer-events:auto; }
+      body.passthrough #bar { display:none; }
 
       #bar button {
         height:22px; border:1px solid #eee; background:#fff;
@@ -46,12 +47,16 @@
       .rh.b { bottom:0; left:0; width:100%; height:6px; cursor:ns-resize; }
       .rh.c { bottom:0; right:0; width:12px; height:12px; cursor:nwse-resize; background:rgba(0,0,0,0.2); }
 
-      /* 編輯模式邊框指示 */
+      /* 編輯模式邊框指示（passthrough 不顯示） */
       body.edit::after {
         content:''; position:absolute; inset:0;
         border:2px solid rgba(137,180,250,0.5);
         pointer-events:none; z-index:19;
       }
+
+      /* passthrough 模式：不顯示 resize 把手和拖移把手 */
+      body.passthrough #drag { display:none; }
+      body.passthrough .rh { display:none; }
 
       /* 佔位 */
       #placeholder {
@@ -143,7 +148,14 @@
 
       function setMode(m) {
         mode = m;
-        document.body.className = m === "locked" ? "locked" : "edit";
+        // 三態：locked / edit / passthrough — 各自對應不同 body class
+        if (m === "edit") {
+          document.body.className = "edit";
+        } else if (m === "passthrough") {
+          document.body.className = "passthrough";
+        } else {
+          document.body.className = "locked";
+        }
         document.getElementById("btn-lock").textContent = m === "locked" ? "解鎖" : "鎖定";
         if (win) win.setResizable(m === "edit");
       }
