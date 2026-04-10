@@ -379,19 +379,34 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        let detected_url = detect_browser_url();
+        // 先清掉舊的偵測 URL
         {
             let state = app.state::<crate::state::ManagedState>();
             if let Ok(mut guard) = state.lock() {
-                guard.detected_url = detected_url;
-                // 清理上一次的全域截圖暫存檔
+                guard.detected_url = None;
                 if let Some(old_path) = guard.screenshot_path.take() {
                     let _ = std::fs::remove_file(&old_path);
                 }
             };
         }
 
-        // 截圖前隱藏所有 WisdomBoard 視窗，確保截到真正的桌面內容
+        // 第一步：先隱藏 settings 視窗，讓瀏覽器變成前景
+        if let Some(settings_win) = app.get_webview_window("settings") {
+            let _ = settings_win.hide();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        // 第二步：偵測當前前景視窗的 URL（現在應該是瀏覽器了）
+        let detected_url = detect_browser_url();
+        println!("[WisdomBoard] 偵測 URL 結果: {:?}", detected_url);
+        {
+            let state = app.state::<crate::state::ManagedState>();
+            if let Ok(mut guard) = state.lock() {
+                guard.detected_url = detected_url;
+            };
+        }
+
+        // 第三步：隱藏所有其他 WisdomBoard 視窗
         let all_wins: Vec<_> = app.webview_windows().into_iter().collect();
         for (_, win) in &all_wins {
             if let Ok(raw) = win.hwnd() {
