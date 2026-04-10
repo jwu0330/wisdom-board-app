@@ -16,39 +16,59 @@
 
       .body { padding:12px 16px; }
 
-      /* 快捷鍵設定區 */
-      .hotkey-section { margin-bottom:12px; padding:10px 12px; border:1px solid #eee; background:#fafafa; }
-      .hotkey-section .label { font-size:11px; color:#666; margin-bottom:6px; }
-      .hotkey-row { display:flex; align-items:center; gap:6px; }
-      .hotkey-row input { flex:1; padding:6px 10px; border:1px solid #ddd; font-size:12px; font-family:inherit; background:#fff; text-align:center; cursor:pointer; outline:none; }
-      .hotkey-row input:focus { border-color:#111; background:#fffff0; }
-      .hotkey-row button { padding:5px 10px; border:1px solid #ddd; font-size:11px; cursor:pointer; font-family:inherit; background:#fff; }
-      .hotkey-row button:hover { background:#f5f5f5; }
-      .hotkey-row .btn-save { background:#111; color:#fff; border-color:#111; }
-      .hotkey-row .btn-save:hover { background:#333; }
-      .hotkey-msg { font-size:10px; color:#999; margin-top:4px; }
+      /* 設定列：快捷鍵 + 自啟動同一行 */
+      .config-row { display:flex; align-items:center; gap:8px; margin-bottom:10px; padding:8px 10px; border:1px solid #eee; background:#fafafa; flex-wrap:wrap; }
+      .config-row .label { font-size:11px; color:#666; white-space:nowrap; }
+      .config-row input[type="text"] { width:120px; padding:4px 8px; border:1px solid #ddd; font-size:11px; font-family:inherit; background:#fff; text-align:center; cursor:pointer; outline:none; }
+      .config-row input[type="text"]:focus { border-color:#111; background:#fffff0; }
+      .config-row button { padding:3px 8px; border:1px solid #ddd; font-size:10px; cursor:pointer; font-family:inherit; background:#fff; }
+      .config-row button:hover { background:#f5f5f5; }
+      .config-row .btn-save { background:#111; color:#fff; border-color:#111; }
+      .config-row .btn-save:hover { background:#333; }
+      .config-row .sep { width:1px; height:20px; background:#ddd; margin:0 4px; }
+      .config-row label { font-size:11px; color:#666; cursor:pointer; white-space:nowrap; display:flex; align-items:center; gap:3px; }
+      .hotkey-msg { font-size:10px; color:#999; padding:0 10px 6px; }
 
-      .add-btn { width:100%; padding:14px; border:1px dashed #ccc; background:none; color:#999; font-size:12px; cursor:pointer; font-family:inherit; margin-bottom:10px; }
+      .add-btn { width:100%; padding:12px; border:1px dashed #ccc; background:none; color:#999; font-size:12px; cursor:pointer; font-family:inherit; margin-bottom:8px; }
       .add-btn:hover { border-color:#111; color:#111; }
 
-      .card { border:1px solid #ddd; margin-bottom:8px; }
-      .card-top { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #eee; background:#fafafa; }
-      .card-top .name { font-weight:600; font-size:12px; }
-      .card-top .tag { font-size:9px; padding:1px 6px; border:1px solid #ccc; margin-left:6px; }
-      .card-top .x { background:none; border:none; color:#999; cursor:pointer; font-size:12px; }
-      .card-top .x:hover { color:#e00; }
-      .card-body { padding:8px 12px; }
-      .card-url { font-size:10px; color:#999; word-break:break-all; margin-bottom:6px; }
-      .pills { display:flex; gap:2px; margin-bottom:6px; }
-      .pill { padding:3px 10px; border:1px solid #ddd; font-size:10px; cursor:pointer; background:#fff; color:#666; font-family:inherit; }
+      /* 面板列表 — 表格式 */
+      .list-head { display:flex; align-items:center; padding:6px 12px; border:1px solid #ddd; border-bottom:none; background:#f5f5f5; font-size:11px; color:#666; }
+      .list-head label { display:flex; align-items:center; gap:4px; cursor:pointer; font-size:11px; }
+      .list-head .spacer { flex:1; }
+
+      .card { border:1px solid #ddd; border-top:none; }
+      .card:first-child { border-top:1px solid #ddd; }
+      .card.editing { background:#111; color:#fff; }
+      .card.editing .card-url { color:rgba(255,255,255,0.5); }
+      .card.editing .tag { border-color:rgba(255,255,255,0.3); color:rgba(255,255,255,0.7); }
+      .card.editing .x:hover { color:#f66; }
+      .card.editing .pill { background:transparent; color:rgba(255,255,255,0.6); border-color:rgba(255,255,255,0.3); }
+      .card.editing .pill.on { background:#fff; color:#111; border-color:#fff; }
+      .card.editing .pill:hover { border-color:#fff; color:#fff; }
+      .card.editing .zoom-row span { color:rgba(255,255,255,0.5); }
+      .card.editing .zoom-row .val { color:rgba(255,255,255,0.7); }
+
+      .card-row { display:flex; align-items:center; padding:8px 12px; gap:8px; }
+      .card-row .cb { margin-right:2px; }
+      .card-row .info { flex:1; min-width:0; }
+      .card-row .name { font-weight:600; font-size:12px; }
+      .card-row .tag { font-size:9px; padding:1px 6px; border:1px solid #ccc; margin-left:6px; }
+      .card-url { font-size:10px; color:#999; word-break:break-all; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .card-row .x { background:none; border:none; color:#999; cursor:pointer; font-size:12px; }
+      .card-row .x:hover { color:#e00; }
+
+      .card-ctrl { display:flex; align-items:center; gap:6px; padding:4px 12px 8px 32px; }
+      .pills { display:flex; gap:2px; }
+      .pill { padding:2px 8px; border:1px solid #ddd; font-size:10px; cursor:pointer; background:#fff; color:#666; font-family:inherit; }
       .pill:hover { border-color:#111; color:#111; }
       .pill.on { background:#111; color:#fff; border-color:#111; }
-      .zoom-row { display:flex; align-items:center; gap:6px; }
+      .zoom-row { display:flex; align-items:center; gap:4px; flex:1; }
       .zoom-row span { font-size:10px; color:#999; }
-      .zoom-row input { flex:1; }
+      .zoom-row input { flex:1; max-width:120px; }
       .zoom-row .val { font-size:10px; min-width:30px; text-align:right; color:#666; }
 
-      .empty { text-align:center; padding:30px; color:#ccc; font-size:12px; }
+      .empty { text-align:center; padding:30px; color:#ccc; font-size:12px; border:1px solid #ddd; }
 
       .ov { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:100; align-items:center; justify-content:center; }
       .ov.show { display:flex; }
@@ -79,34 +99,32 @@
     <div class="top">
       <h1>WISDOMBOARD</h1>
       <div class="acts">
-        <button id="btn-edit-all" title="全部編輯模式">全部編輯</button>
-        <button id="btn-lock-all" title="全部鎖定模式">全部鎖定</button>
         <button id="btn-close-all" title="關閉全部面板">全部關閉</button>
       </div>
     </div>
 
     <div class="body">
-      <!-- 快捷鍵設定 -->
-      <div class="hotkey-section">
-        <div class="label">全域快捷鍵</div>
-        <div class="hotkey-row">
-          <input id="hotkey-input" readonly placeholder="按下快捷鍵組合..." title="點擊後按下新的快捷鍵組合" />
-          <button class="btn-save" id="hotkey-save">儲存</button>
-          <button id="hotkey-reset">重設</button>
-        </div>
-        <div class="hotkey-msg" id="hotkey-msg"></div>
+      <!-- 快捷鍵 + 自啟動：同一列 -->
+      <div class="config-row">
+        <span class="label">框選快捷鍵</span>
+        <input type="text" id="hotkey-input" readonly placeholder="按下快捷鍵..." title="點擊後按下新的快捷鍵組合" />
+        <button class="btn-save" id="hotkey-save">儲存</button>
+        <button id="hotkey-reset">重設</button>
+        <div class="sep"></div>
+        <label><input type="checkbox" id="autostart-toggle" /> 開機自啟</label>
       </div>
-
-      <!-- 開機自動啟動 -->
-      <div class="hotkey-section">
-        <div class="label">開機自動啟動</div>
-        <div class="hotkey-row">
-          <label><input type="checkbox" id="autostart-toggle" /> 啟用開機自動啟動</label>
-        </div>
-      </div>
+      <div class="hotkey-msg" id="hotkey-msg"></div>
 
       <button class="add-btn" id="btn-add">+ 新增面板</button>
-      <div id="list"><div class="empty">尚未建立面板</div></div>
+
+      <!-- 全選表頭 + 面板列表 -->
+      <div id="list-container">
+        <div class="list-head" id="list-head" style="display:none;">
+          <label><input type="checkbox" id="cb-all" /> 全選編輯</label>
+          <span class="spacer"></span>
+        </div>
+        <div id="list"><div class="empty">尚未建立面板</div></div>
+      </div>
     </div>
 
     <div class="ov" id="dlg">
@@ -139,6 +157,8 @@
 
       let panels = [];
       const listEl = document.getElementById("list");
+      const listHead = document.getElementById("list-head");
+      const cbAll = document.getElementById("cb-all");
       const dlg = document.getElementById("dlg");
       const urlArea = document.getElementById("url-area");
       const urlIn = document.getElementById("url-in");
@@ -167,19 +187,16 @@
       }
 
       hotkeyInput.addEventListener("focus", () => {
-        console.log("[settings] hotkey input focused");
         hotkeyInput.value = "請按下快捷鍵...";
         hotkeyMsg.textContent = "按住修飾鍵（Ctrl/Alt/Shift）再按一個字母或數字鍵";
       });
 
       hotkeyInput.addEventListener("blur", () => {
-        console.log("[settings] hotkey input blurred");
         if (!pendingHotkey) loadHotkey();
         hotkeyMsg.textContent = "";
       });
 
       hotkeyInput.addEventListener("keydown", (e) => {
-        console.log("[settings] keydown:", e.key, "ctrl:", e.ctrlKey, "alt:", e.altKey, "shift:", e.shiftKey, "keyCode:", e.keyCode);
         e.preventDefault();
         if (["Control","Alt","Shift","Meta"].includes(e.key)) return;
 
@@ -255,7 +272,6 @@
         try {
           await invoke("set_autostart", { enabled: e.target.checked });
         } catch (err) {
-          console.error("[settings] autostart 設定失敗:", err);
           document.getElementById("st").textContent = "自啟動設定失敗：" + err;
         }
       });
@@ -275,7 +291,7 @@
       urlIn.onkeydown = (e) => { if (e.key === "Enter" && urlIn.value.trim()) doCreateUrl(); };
       document.getElementById("url-no").onclick = () => { urlArea.classList.remove("show"); urlIn.value = ""; };
 
-      let isSliding = false; // 防止 re-render 時銷毀正在拖曳的 slider
+      let isSliding = false;
       let creatingUrl = false;
       async function doCreateUrl() {
         if (creatingUrl) return;
@@ -297,43 +313,57 @@
         try { await invoke("open_capture_overlay"); } catch (e) { alert("建立失敗：" + e); }
       };
 
-      document.getElementById("btn-edit-all").onclick = async () => {
-        try { await invoke("set_mode", { mode: "edit" }); }
-        catch (e) { console.warn("[settings] set_mode 失敗:", e); }
-        await syncPanels();
-      };
-      document.getElementById("btn-lock-all").onclick = async () => {
-        try { await invoke("set_mode", { mode: "locked" }); }
-        catch (e) { console.warn("[settings] set_mode 失敗:", e); }
-        await syncPanels();
-      };
+      // 全部關閉（不關閉設定視窗）
       document.getElementById("btn-close-all").onclick = async () => {
         try {
           await invoke("close_all_panels");
           panels = []; render();
-          window.__TAURI__.window.getCurrentWindow().close();
         } catch (e) {
-          console.warn("[settings] close_all_panels 失敗:", e);
           document.getElementById("st").textContent = "關閉失敗：" + e;
         }
       };
 
+      // 全選編輯 checkbox
+      cbAll.addEventListener("change", async () => {
+        const mode = cbAll.checked ? "edit" : "locked";
+        try { await invoke("set_mode", { mode }); } catch(e) { console.warn(e); }
+        for (const p of panels) {
+          p.editing = cbAll.checked;
+          p.passthrough = false;
+          p.mode = mode;
+        }
+        render();
+      });
+
       function render() {
         document.getElementById("ct").textContent = "面板：" + panels.length;
-        if (isSliding) return; // 正在拖曳 slider 時不重建 DOM，避免中斷操作
+        if (isSliding) return;
+
+        listHead.style.display = panels.length ? "" : "none";
+
         if (!panels.length) { listEl.innerHTML = '<div class="empty">尚未建立面板</div>'; return; }
+
+        // 更新全選 checkbox 狀態
+        const allEditing = panels.every(p => p.editing);
+        const someEditing = panels.some(p => p.editing);
+        cbAll.checked = allEditing;
+        cbAll.indeterminate = someEditing && !allEditing;
+
         listEl.innerHTML = panels.map((p, i) => {
           const isUrl = p.type === 'url';
           const editing = p.editing || false;
           const passthrough = p.passthrough || false;
           return `
-          <div class="card" data-label="${esc(p.label)}">
-            <div class="card-top">
-              <span><span class="name">面板 ${i+1}</span><span class="tag">${isUrl?'URL':'擷取'}</span></span>
+          <div class="card ${editing ? 'editing' : ''}" data-label="${esc(p.label)}">
+            <div class="card-row">
+              <input type="checkbox" class="cb" data-action="check" ${editing ? 'checked' : ''} />
+              <div class="info">
+                <span class="name">面板 ${i+1}</span><span class="tag">${isUrl?'URL':'擷取'}</span>
+                ${p.url ? '<div class="card-url" title="'+esc(p.url)+'">'+esc(p.url)+'</div>' : ''}
+              </div>
               <button class="x" data-action="close">&#x2715;</button>
             </div>
-            <div class="card-body">
-              ${p.url ? '<div class="card-url">'+esc(p.url)+'</div>' : ''}
+            <div class="card-ctrl">
               <div class="pills">
                 <button class="pill ${editing?'on':''}" data-action="toggle" data-flag="editing">編輯</button>
                 <button class="pill ${passthrough?'on':''}" data-action="toggle" data-flag="passthrough">穿透</button>
@@ -348,7 +378,7 @@
         }).join("");
       }
 
-      // Event delegation — 全部掛在 listEl 上，避免 inline onclick CSP 問題
+      // Event delegation
       listEl.addEventListener("click", async (e) => {
         const btn = e.target.closest("[data-action]");
         if (!btn) return;
@@ -369,22 +399,34 @@
           const flag = btn.dataset.flag;
           const p = panels.find(x => x.label === label);
           if (!p) return;
-          // toggle：editing 和 passthrough 互斥
           const newVal = !p[flag];
           p.editing = false;
           p.passthrough = false;
           if (newVal) p[flag] = true;
           const mode = p.editing ? "edit" : (p.passthrough ? "passthrough" : "locked");
-          try {
-            await invoke("set_panel_mode", { label, mode });
-          } catch(e) {
-            console.error("模式切換失敗:", e);
-          }
+          p.mode = mode;
+          try { await invoke("set_panel_mode", { label, mode }); } catch(e) { console.error(e); }
           render();
         }
       });
 
-      // slider 拖曳狀態追蹤：防止 render() 中斷拖曳
+      // checkbox 直接切換編輯模式
+      listEl.addEventListener("change", async (e) => {
+        if (e.target.dataset.action !== "check") return;
+        const card = e.target.closest("[data-label]");
+        if (!card) return;
+        const label = card.dataset.label;
+        const p = panels.find(x => x.label === label);
+        if (!p) return;
+        const checked = e.target.checked;
+        p.editing = checked;
+        p.passthrough = false;
+        p.mode = checked ? "edit" : "locked";
+        try { await invoke("set_panel_mode", { label, mode: p.mode }); } catch(e) { console.error(e); }
+        render();
+      });
+
+      // slider 拖曳狀態追蹤
       listEl.addEventListener("mousedown", (e) => {
         if (e.target.matches('[data-action="zoom"]')) isSliding = true;
       });
@@ -416,8 +458,7 @@
         const label = typeof d === "string" ? d : d.label;
         const type = (typeof d === "object" && d.type) ? d.type : "capture";
         const url = (typeof d === "object" && d.url) ? d.url : null;
-        const defaultMode = type === "capture" ? "locked" : "edit";
-        const mode = (typeof d === "object" && d.mode) ? d.mode : defaultMode;
+        const mode = (typeof d === "object" && d.mode) ? d.mode : "locked";
         const zoom = (typeof d === "object" && typeof d.zoom === "number") ? d.zoom : 1.0;
         if (label && !panels.find(p => p.label === label)) {
           panels.push({ label, url, type, mode, editing: mode === "edit", passthrough: mode === "passthrough", zoom });
@@ -441,17 +482,12 @@
             } else {
               const m = p.mode ?? "locked";
               panels.push({
-                label: p.label,
-                url: p.url ?? null,
-                type: p.type ?? "capture",
-                mode: m,
-                zoom: (typeof p.zoom === "number") ? p.zoom : 1.0,
-                editing: m === "edit",
-                passthrough: m === "passthrough"
+                label: p.label, url: p.url ?? null, type: p.type ?? "capture",
+                mode: m, zoom: (typeof p.zoom === "number") ? p.zoom : 1.0,
+                editing: m === "edit", passthrough: m === "passthrough"
               });
             }
           }
-          // 移除 state 中不存在的面板
           const existingLabels = new Set(existing.map(p => p.label));
           panels = panels.filter(p => existingLabels.has(p.label));
           render();

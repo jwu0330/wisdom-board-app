@@ -55,8 +55,8 @@ pub fn start_listener(app_handle: AppHandle) {
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND(0), 0, 0).as_bool() {
                 if msg.message == WM_HOTKEY && msg.wParam == WPARAM(HOTKEY_SNIP as usize) {
-                    println!("[WisdomBoard] 快捷鍵觸發，開啟設定視窗");
-                    let _ = crate::open_settings(app.clone());
+                    println!("[WisdomBoard] 快捷鍵觸發，開啟框選 overlay");
+                    let _ = crate::capture::open_capture_overlay(app.clone());
                 }
 
                 if msg.message == WM_REREGISTER_HOTKEY {
