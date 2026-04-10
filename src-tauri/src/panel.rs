@@ -66,13 +66,13 @@ fn lock_window(hwnd: HWND) {
     }
 }
 
-/// 解鎖視窗：移除 WS_EX_TRANSPARENT + WS_EX_LAYERED
+/// 解鎖視窗：移除 WS_EX_TRANSPARENT + WS_EX_LAYERED + WS_EX_NOACTIVATE
 fn unlock_window(hwnd: HWND) {
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::*;
         let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
         SetWindowLongW(hwnd, GWL_EXSTYLE,
-            (ex & !(WS_EX_TRANSPARENT.0 | WS_EX_LAYERED.0)) as i32);
+            (ex & !(WS_EX_TRANSPARENT.0 | WS_EX_LAYERED.0 | WS_EX_NOACTIVATE.0)) as i32);
     }
 }
 
@@ -515,16 +515,29 @@ pub fn set_panel_mode(app: AppHandle, label: String, mode: String) -> Result<(),
             }
         }
         "passthrough" => {
-            // 穿透：可操作內容，但不置頂、不可調整大小
+            // 穿透：可操作內容，但強制在底層，不跳到前面
             if let Ok(raw) = window.hwnd() {
                 let hwnd = HWND(raw.0 as isize);
-                unlock_window(hwnd);
+                unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::*;
+                    // 移除 WS_EX_TRANSPARENT（接收滑鼠）但保留 WS_EX_LAYERED
+                    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                    let new_ex = (ex & !WS_EX_TRANSPARENT.0) | WS_EX_LAYERED.0;
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, new_ex as i32);
+                    // alpha=255 完全不透明
+                    SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), 255,
+                        windows::Win32::UI::WindowsAndMessaging::LWA_ALPHA);
+                    // 加上 WS_EX_NOACTIVATE 防止點擊時激活到前面
+                    let ex2 = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex2 | WS_EX_NOACTIVATE.0) as i32);
+                    // 置底
+                    let _ = SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                }
             }
             let _ = window.set_always_on_top(false);
             let _ = window.set_resizable(false);
-            let _ = window.show();
             if is_url {
-                // 移除 drag overlay + 阻止 fullscreen API（影片只能在面板內放大）
                 let _ = window.eval(
                     "var d=document.getElementById('wb-drag-overlay'); if(d) d.style.display='none';\
                      Element.prototype.requestFullscreen=function(){return Promise.resolve();};\
