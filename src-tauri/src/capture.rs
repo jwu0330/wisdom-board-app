@@ -1,4 +1,4 @@
-use crate::state::{ManagedState, ManagedOverlayState, PanelConfig, PanelType};
+use crate::state::{ManagedState, ManagedOverlayState, PanelType};
 use tauri::{AppHandle, Emitter, Manager};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{
@@ -377,11 +377,9 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
             };
         }
 
-        let scale = app.primary_monitor()
-            .ok()
-            .flatten()
-            .map(|m| m.scale_factor())
-            .unwrap_or(1.0);
+        // Overlay 目前只覆蓋主螢幕(Phase 5 再處理跨螢幕 overlay,規格書 §8.7)
+        // 所有 scale 查詢統一走 monitor 模組,不再直接呼叫 primary_monitor()
+        let scale = crate::monitor::primary_scale_factor(&app);
 
         let (screen_w, screen_h) = unsafe {
             (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN))
@@ -438,12 +436,9 @@ pub fn capture_region(
     if width <= 0.0 || height <= 0.0 {
         return Err(format!("無效的擷取尺寸: {}x{}", width, height));
     }
-    // 使用主螢幕 scale_factor
-    let scale = app.primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
+    // 目前 overlay 僅覆蓋主螢幕,因此框選座標用主螢幕 scale 轉換。
+    // 規格書 §7.3、§8.7:跨螢幕 overlay 是 Phase 5 議題。
+    let scale = crate::monitor::primary_scale_factor(&app);
 
     let phys_x = (x * scale) as i32;
     let phys_y = (y * scale) as i32;
@@ -482,24 +477,20 @@ pub fn capture_region(
                 }
             };
 
+            // 透過 panel::make_panel_config 統一填入螢幕綁定欄位(規格書 §5.4)
+            let config = crate::panel::make_panel_config(
+                &app,
+                label.clone(),
+                PanelType::Capture,
+                None,
+                logical_x, logical_y, logical_w, logical_h,
+                "locked",
+                Some(screenshot_path.clone()),
+            );
             {
                 let state = app.state::<ManagedState>();
                 if let Ok(mut guard) = state.lock() {
-                    guard.panels.insert(
-                        label.clone(),
-                        PanelConfig {
-                            label: label.clone(),
-                            panel_type: PanelType::Capture,
-                            url: None,
-                            x: logical_x,
-                            y: logical_y,
-                            width: logical_w,
-                            height: logical_h,
-                            mode: "locked".into(),
-                            zoom: 1.0,
-                            screenshot_path: Some(screenshot_path.clone()),
-                        },
-                    );
+                    guard.panels.insert(label.clone(), config);
                 };
             }
 

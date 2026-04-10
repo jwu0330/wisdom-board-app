@@ -23,6 +23,21 @@ pub struct PanelConfig {
     /// 擷取面板的截圖 BMP 檔案路徑（僅執行期暫存，不持久化）
     #[serde(skip_serializing, default)]
     pub screenshot_path: Option<String>,
+
+    // === 螢幕綁定欄位(規格書 §5.4、§9.2)===
+    // 全部用 Option + serde default,讓舊版 config.json 可直接讀取。
+    /// 面板歸屬螢幕的硬體指紋,用於重啟後重新定位
+    #[serde(default)]
+    pub monitor_fingerprint: Option<String>,
+    /// 面板左上角在歸屬螢幕內的比例位置 x (0.0~1.0)
+    #[serde(default)]
+    pub monitor_relative_x: Option<f64>,
+    /// 面板左上角在歸屬螢幕內的比例位置 y (0.0~1.0)
+    #[serde(default)]
+    pub monitor_relative_y: Option<f64>,
+    /// 面板是否因螢幕斷開而被遷移(規格書 §5.3)
+    #[serde(default)]
+    pub is_migrated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,13 +68,15 @@ pub struct AppConfig {
     pub autostart: bool,
 }
 
-fn default_version() -> u32 { 1 }
+fn default_version() -> u32 { 2 }
 fn default_autostart() -> bool { true }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: 1,
+            // version 2 新增螢幕綁定欄位(monitor_fingerprint 等)。
+            // 舊版 v1 config.json 可無痛讀取,欄位會被 serde default 填為 None/false。
+            version: 2,
             panels: Vec::new(),
             hotkey: HotkeyConfig::default(),
             autostart: true,

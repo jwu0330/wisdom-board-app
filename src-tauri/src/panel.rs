@@ -110,12 +110,58 @@ pub fn next_panel_id() -> String {
     format!("panel-{}-{}", ts, seq)
 }
 
-fn get_scale(app: &AppHandle) -> f64 {
-    app.primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0)
+/// 找到一個物理虛擬桌面座標所屬螢幕的 scale factor
+///
+/// 這取代了原本寫死主螢幕 scale 的 `get_scale()`。若該座標不在任何螢幕內
+/// (dead zone),退回主螢幕 scale。對應規格書 §2.3、§7.2。
+fn scale_for_physical_point(app: &AppHandle, px: i32, py: i32) -> f64 {
+    let monitors = crate::monitor::enumerate(app);
+    crate::monitor::find_by_physical_point(&monitors, px, py)
+        .map(|m| m.scale_factor)
+        .unwrap_or_else(|| crate::monitor::primary_scale_factor(app))
+}
+
+/// 建構 `PanelConfig` 的統一入口,自動填寫螢幕綁定欄位(規格書 §5.4、§9.2)。
+///
+/// 這是所有「建立面板」路徑(create_panel / create_url_panel* / capture_region)
+/// 的唯一構造函式,確保 fingerprint / relative 欄位不會遺漏。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn make_panel_config(
+    app: &AppHandle,
+    label: String,
+    panel_type: PanelType,
+    url: Option<String>,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    mode: &str,
+    screenshot_path: Option<String>,
+) -> PanelConfig {
+    let monitors = crate::monitor::enumerate(app);
+    let primary_scale = crate::monitor::primary_scale_factor(app);
+    let binding = crate::monitor::find_by_panel_rect(&monitors, x, y, width, height)
+        .map(|m| {
+            let (rx, ry) =
+                crate::monitor::compute_relative_position(m, x, y, primary_scale);
+            (m.fingerprint.clone(), rx, ry)
+        });
+    PanelConfig {
+        label,
+        panel_type,
+        url,
+        x,
+        y,
+        width,
+        height,
+        mode: mode.into(),
+        zoom: 1.0,
+        screenshot_path,
+        monitor_fingerprint: binding.as_ref().map(|b| b.0.clone()),
+        monitor_relative_x: binding.as_ref().map(|b| b.1),
+        monitor_relative_y: binding.as_ref().map(|b| b.2),
+        is_migrated: false,
+    }
 }
 
 pub fn handle_panel_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent) {
@@ -138,18 +184,55 @@ pub fn handle_panel_event(app: &AppHandle, label: &str, event: &tauri::WindowEve
             let _ = app.emit("panel-closed", label);
         }
         tauri::WindowEvent::Moved(pos) => {
-            let scale = get_scale(app);
+            // 使用面板所屬螢幕的 scale 進行轉換,而非寫死主螢幕 scale。
+            // 規格書 §2.3:多螢幕異 DPI 時必須用歸屬螢幕 scale。
+            let scale = scale_for_physical_point(app, pos.x, pos.y);
+            let new_x = pos.x as f64 / scale;
+            let new_y = pos.y as f64 / scale;
+
+            // 先在鎖外算出新的螢幕綁定資訊(fingerprint + relative),
+            // 避免持有鎖時再呼叫 monitor::enumerate。
+            let (width, height) = {
+                let state = app.state::<ManagedState>();
+                state
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.panels.get(label).map(|p| (p.width, p.height)))
+                    .unwrap_or((0.0, 0.0))
+            };
+            let monitors = crate::monitor::enumerate(app);
+            let primary_scale = crate::monitor::primary_scale_factor(app);
+            let binding = crate::monitor::find_by_panel_rect(
+                &monitors, new_x, new_y, width, height,
+            )
+            .map(|owning| {
+                let (rx, ry) = crate::monitor::compute_relative_position(
+                    owning, new_x, new_y, primary_scale,
+                );
+                (owning.fingerprint.clone(), rx, ry)
+            });
+
             let state = app.state::<ManagedState>();
             if let Ok(mut guard) = state.lock() {
                 if let Some(p) = guard.panels.get_mut(label) {
-                    p.x = pos.x as f64 / scale;
-                    p.y = pos.y as f64 / scale;
+                    p.x = new_x;
+                    p.y = new_y;
+                    if let Some((fp, rx, ry)) = binding {
+                        p.monitor_fingerprint = Some(fp);
+                        p.monitor_relative_x = Some(rx);
+                        p.monitor_relative_y = Some(ry);
+                    }
                 }
             };
             debounced_auto_save(app);
         }
         tauri::WindowEvent::Resized(size) => {
-            let scale = get_scale(app);
+            // Resized 事件不帶位置,透過視窗查詢當前物理位置決定所屬螢幕
+            let scale = app
+                .get_webview_window(label)
+                .and_then(|w| w.outer_position().ok())
+                .map(|pos| scale_for_physical_point(app, pos.x, pos.y))
+                .unwrap_or_else(|| crate::monitor::primary_scale_factor(app));
             let state = app.state::<ManagedState>();
             if let Ok(mut guard) = state.lock() {
                 if let Some(p) = guard.panels.get_mut(label) {
@@ -246,24 +329,19 @@ pub fn create_url_panel(app: AppHandle, url: String) -> Result<String, String> {
         .parse()
         .map_err(|e: url::ParseError| format!("網址格式錯誤: {e}"))?;
 
+    let config = make_panel_config(
+        &app,
+        label.clone(),
+        PanelType::Url,
+        Some(url.clone()),
+        0.0, 0.0, 800.0, 600.0,
+        "locked",
+        None,
+    );
     {
         let state = app.state::<ManagedState>();
         let mut guard = state.lock().map_err(|e| format!("state lock 失敗: {e}"))?;
-        guard.panels.insert(
-            label.clone(),
-            PanelConfig {
-                label: label.clone(),
-                panel_type: PanelType::Url,
-                url: Some(url.clone()),
-                x: 0.0,
-                y: 0.0,
-                width: 800.0,
-                height: 600.0,
-                mode: "locked".into(),
-                zoom: 1.0,
-                screenshot_path: None,
-            },
-        );
+        guard.panels.insert(label.clone(), config);
         drop(guard);
     }
 
@@ -284,21 +362,19 @@ pub fn create_url_panel_at(
     url.parse::<url::Url>()
         .map_err(|e: url::ParseError| format!("網址格式錯誤: {e}"))?;
 
+    let config = make_panel_config(
+        &app,
+        label.clone(),
+        PanelType::Url,
+        Some(url.clone()),
+        x, y, width, height,
+        "locked",
+        None,
+    );
     {
         let state = app.state::<ManagedState>();
         let mut guard = state.lock().map_err(|e| format!("state lock 失敗: {e}"))?;
-        guard.panels.insert(
-            label.clone(),
-            PanelConfig {
-                label: label.clone(),
-                panel_type: PanelType::Url,
-                url: Some(url.clone()),
-                x, y, width, height,
-                mode: "locked".into(),
-                zoom: 1.0,
-                screenshot_path: None,
-            },
-        );
+        guard.panels.insert(label.clone(), config);
         drop(guard);
     }
 

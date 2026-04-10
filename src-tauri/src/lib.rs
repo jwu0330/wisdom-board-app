@@ -1,5 +1,6 @@
 mod capture;
 mod hotkey;
+mod monitor;
 mod panel;
 mod persistence;
 mod state;
