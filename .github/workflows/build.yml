@@ -60,8 +60,8 @@ jobs:
       - name: Delete old latest release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release delete latest --yes --cleanup-tag 2>$null; exit 0
-        shell: pwsh
+        shell: bash
+        run: gh release delete latest --yes --cleanup-tag || true
 
       - name: Create Release
         env:
