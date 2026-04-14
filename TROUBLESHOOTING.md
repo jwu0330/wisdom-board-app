@@ -1,6 +1,6 @@
 # WisdomBoard 執行 / 部署流程與疑難排解
 
-> 版本：v0.3.0｜最後更新：2026-04-09
+> 版本：v0.4.0｜最後更新：2026-04-14
 
 ---
 
@@ -226,9 +226,19 @@ taskkill /PID <PID> /F
 
 ---
 
-#### 狀況：截圖 Overlay 無法顯示螢幕截圖（白畫面或黑畫面）
+#### 狀況：截圖 Overlay 無法顯示螢幕截圖（白畫面，停在「正在載入螢幕截圖...」）
 
-**原因：** Tauri v2 的 `convertFileSrc()` 走 `asset://` 協議，需要設定 scope 才能讀取本機檔案。
+**常見原因 A（v0.4.0 前）：** `tauri-init.js` 未被 Vite 打包到 `dist/`，導致 `waitForTauri` 未定義，所有 Tauri IPC 靜默失敗。
+
+**v0.4.0 修正：** 將 `tauri-init.js` 移至 `public/` 目錄，並在 HTML 改用絕對路徑引用：
+```html
+<script src="/tauri-init.js"></script>
+```
+Vite 的 `public/` 目錄保證所有檔案會無條件複製到 `dist/` 根目錄。
+
+---
+
+**常見原因 B：** `asset://` 協議 scope 未設定，Tauri 拒絕讀取本機截圖檔案。
 
 **解法：** 確認 `tauri.conf.json` 包含 asset protocol 設定：
 
@@ -236,7 +246,7 @@ taskkill /PID <PID> /F
 {
   "app": {
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; img-src 'self' asset: https:; style-src 'self' 'unsafe-inline'",
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; img-src 'self' asset: https: data:; style-src 'self' 'unsafe-inline'",
       "assetProtocol": {
         "enable": true,
         "scope": ["$TEMP/**", "$APPDATA/**"]
@@ -247,7 +257,7 @@ taskkill /PID <PID> /F
 ```
 
 關鍵：
-- `img-src` 必須包含 `asset:` 才能顯示本機圖片
+- `img-src` 必須包含 `asset:` 和 `data:`（截圖以 base64 data URL 傳遞）
 - `scope` 必須包含 `$TEMP/**`，因為截圖存在 `%TEMP%/wisdomboard_screenshot.bmp`
 
 ---
@@ -286,22 +296,17 @@ if let Some(overlay_win) = app.get_webview_window("overlay") {
 
 #### 狀況：高 DPI 螢幕下框選座標偏移
 
-**原因：** scale factor 原本從 Overlay 視窗取得，但 Overlay 關閉後會 fallback 到 1.0。
+> **v0.4.0 已修正**：此問題已透過 `monitor.rs` 系統性解決，下方說明保留作為歷史參考。
 
-**解法：** 改用 `primary_monitor()` 取得穩定的 scale factor：
+**原因：** scale factor 原本從 Overlay 視窗取得，但 Overlay 關閉後會 fallback 到 1.0；且所有路徑都使用主螢幕 scale，多螢幕異 DPI 下副螢幕面板座標不正確。
+
+**v0.4.0 解法：** 新增 `monitor.rs` 作為唯一的螢幕資訊入口。`capture_region` 改透過 `monitor::find_by_primary_logical_point()` 取得對應螢幕的 scale factor，不再直接呼叫 `primary_monitor()`。
 
 ```rust
-// 錯誤 — overlay 可能已被關閉
-let scale = app.get_webview_window("overlay")
-    .and_then(|w| w.scale_factor().ok())
-    .unwrap_or(1.0);
-
-// 正確
-let scale = app.primary_monitor()
-    .ok()
-    .flatten()
-    .map(|m| m.scale_factor())
-    .unwrap_or(1.0);
+// v0.4.0 做法 — 用面板中心點所在螢幕的 scale
+let monitors = monitor::enumerate(&app);
+let owning = monitor::find_by_panel_rect(&monitors, x, y, width, height);
+let scale = owning.map(|m| m.scale_factor).unwrap_or(1.0);
 ```
 
 ---

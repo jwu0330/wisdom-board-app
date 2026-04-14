@@ -1,7 +1,7 @@
 # WisdomBoard 開發說明文件
 
-> **版本：** v0.3.0
-> **最後更新：** 2026-04-08
+> **版本：** v0.4.0
+> **最後更新：** 2026-04-14
 > **維護者：** jwu0330
 
 ---
@@ -83,6 +83,7 @@ wisdomboard/
 │   │   ├── main.rs                # 程式進入點（呼叫 lib::run）
 │   │   ├── lib.rs                 # 入口：插件/匣/命令註冊
 │   │   ├── state.rs               # 共用狀態與資料模型
+│   │   ├── monitor.rs             # 螢幕資訊與座標轉換（唯一事實來源）
 │   │   ├── panel.rs               # 面板 CRUD 命令
 │   │   ├── capture.rs             # 截圖、Overlay、瀏覽器 URL 偵測
 │   │   ├── hotkey.rs              # 快捷鍵監聽與自訂
@@ -139,14 +140,32 @@ if !autostart_manager.is_enabled().unwrap_or(false) {
 - **URL 面板**：`create_url_panel` 使用 `WebviewUrl::External` 直接載入外部網頁
 - **擷取面板**：`capture_region` 在框選位置建立空白 panel.html 面板
 
-### 4.5 兩種操作模式
+所有面板建立時均透過 `monitor.rs` 自動填寫螢幕歸屬資訊（fingerprint + 相對座標），供持久化恢復使用。
 
-| 模式 | 行為 |
-|------|------|
-| **編輯 (edit)** | 面板置頂，可拖拉移動、調整大小、操作內容 |
-| **鎖定 (locked)** | 面板置底，點擊穿透，不可操作 |
+### 4.5 三種操作模式
+
+| 模式 | 行為 | 應用場景 |
+|------|------|----------|
+| **編輯 (edit)** | 面板置頂，可拖拉移動、調整大小 | 調整面板位置 |
+| **鎖定 (locked)** | 面板置底，點擊穿透，不可操作 | 一般使用（預設） |
+| **穿透 (passthrough)** | 面板完全透明穿透，不顯示工具列 | 靜默顯示模式 |
 
 settings.html 的 pill 按鈕直接設定模式；panel.html 的工具列按鈕支援 toggle（鎖定 ↔ 解鎖）。
+
+### 4.6 螢幕座標系統 (`monitor.rs`)
+
+`monitor.rs` 是唯一的螢幕資訊與座標轉換來源，其他模組禁止直接呼叫 `primary_monitor()` 或 `GetSystemMetrics(SM_CXSCREEN)`。
+
+主要功能：
+- `enumerate()` — 列出所有連線螢幕，含 fingerprint、位置、scale_factor
+- `find_by_panel_rect()` — 依面板中心點判定歸屬螢幕
+- `clamp_rect_to_monitors()` — 確保面板不超出所有螢幕範圍
+- `resolve_from_relative()` — 從螢幕相對座標恢復絕對座標（重啟後面板定位用）
+
+**螢幕恢復流程**（`restore_panels`）：
+1. 用 `monitor_fingerprint` 找對應螢幕 → 命中則用 `monitor_relative_x/y` 重算絕對座標
+2. 找不到 → fallback 到原絕對座標
+3. 呼叫 `clamp_rect_to_monitors` 確保在螢幕內，記錄 `is_migrated`
 
 ### 4.6 螢幕截圖與框選 Overlay
 
@@ -322,14 +341,19 @@ gh workflow run build.yml
 
 | 模組 | 狀態 | 說明 |
 |------|------|------|
-| 全域快捷鍵 | ✅ 已實作 | `RegisterHotKey` Ctrl+Alt+S |
+| 全域快捷鍵 | ✅ 已實作 | `RegisterHotKey` Ctrl+Alt+S（可自訂） |
 | 截圖式 Overlay | ✅ 已實作 | GDI 截圖 + 全螢幕 Overlay + 拖拉框選 |
 | 面板管理 UI | ✅ 已實作 | settings.html 面板列表 + 模式/縮放控制 |
 | URL 面板 | ✅ 已實作 | `WebviewUrl::External` 直接載入 |
-| DWM Thumbnail | ⬜ 規劃中 | `DwmRegisterThumbnail` 即時縮圖（尚未實作） |
-| 輸入轉發 | ⬜ 規劃中 | 需搭配 DWM Thumbnail 實作，目前已移除 input.rs 死程式碼 |
+| 截圖面板 | ✅ 已實作 | BMP 截圖 + 面板內顯示靜態圖 |
+| 三種面板模式 | ✅ 已實作 | edit / locked / passthrough |
 | 面板持久化 | ✅ 已實作 | JSON 設定檔自動儲存/恢復面板配置 |
 | 自訂快捷鍵 | ✅ 已實作 | 設定視窗 UI 設定 + `PostThreadMessage` 動態註冊 |
+| 螢幕座標系統 | ✅ 已實作 | `monitor.rs` 單一事實來源，fingerprint + relative 雙軌持久化 |
+| 面板超出螢幕保護 | ✅ 已實作 | 重啟時 clamp 到最近螢幕，is_migrated 標記 |
+| 最小面板尺寸限制 | ✅ 已實作 | MIN_PANEL_SIZE = 50px，前後端對齊 |
+| DWM Thumbnail | ⬜ 規劃中 | `DwmRegisterThumbnail` 即時縮圖（尚未實作） |
+| 輸入轉發 | ⬜ 規劃中 | 需搭配 DWM Thumbnail 實作，目前已移除 input.rs 死程式碼 |
 
 ---
 
@@ -356,6 +380,16 @@ gh workflow run build.yml
 | capabilities 只授權 main 視窗 | 擴展到 settings/overlay/panel-* |
 | 根 index.html 為 Tauri 模板 | 替換為最小化頁面 |
 | README.md 為模板內容 | 重寫為專案說明 |
+
+### v0.4.0 修復項目
+
+| 問題 | 修復方式 |
+|------|----------|
+| 多螢幕異 DPI 下面板座標偏移 | 新增 `monitor.rs`，所有螢幕資訊與座標轉換統一入口 |
+| 重啟後面板跑位 / 超出螢幕 | `restore_panels` 改用 fingerprint + relative 雙軌恢復 + clamp |
+| 框選過小（< 50×50）導致異常 | 前後端均加入 `MIN_PANEL_SIZE = 50.0` 限制 |
+| Overlay 截圖卡在「正在載入」白畫面 | `tauri-init.js` 移至 `public/`，改用絕對路徑 `/tauri-init.js` 引用 |
+| CI delete release 在 bash 失敗 | `gh release delete latest --yes --cleanup-tag \|\| true` |
 
 ---
 
