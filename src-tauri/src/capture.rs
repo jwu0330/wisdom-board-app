@@ -361,22 +361,7 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
         // 等待視窗完全隱藏（包含 DWM 動畫）
         std::thread::sleep(std::time::Duration::from_millis(WINDOW_HIDE_ANIMATION_MS));
 
-        let screenshot_path = match capture_screen_to_file() {
-            Ok(p) => p,
-            Err(e) => {
-                println!("[WisdomBoard] 截圖失敗: {e}");
-                restore_panels_after_overlay(&app);
-                return;
-            }
-        };
-
-        {
-            let overlay_state = app.state::<ManagedOverlayState>();
-            if let Ok(mut guard) = overlay_state.lock() {
-                guard.screenshot_path = Some(screenshot_path.clone());
-            };
-        }
-
+        // 透明 overlay 模式：不需要全螢幕截圖作為背景，使用者直接透過透明視窗看見螢幕
         // Overlay 目前只覆蓋主螢幕(Phase 5 再處理跨螢幕 overlay,規格書 §8.7)
         // 所有 scale 查詢統一走 monitor 模組,不再直接呼叫 primary_monitor()
         let scale = crate::monitor::primary_scale_factor(&app);
@@ -398,7 +383,7 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
             .decorations(false)
             .always_on_top(true)
             .skip_taskbar(true)
-            .transparent(false)
+            .transparent(true)
             .resizable(false);
 
         println!("[WisdomBoard] overlay builder 準備 build()...");

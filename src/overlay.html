@@ -7,25 +7,22 @@
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100vw; height: 100vh; overflow: hidden; }
       body {
-        background: rgba(0,0,0,0.01);
+        background: transparent;
         cursor: crosshair;
         user-select: none;
         font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
       }
-      #bg {
-        position: fixed; inset: 0;
-        background-size: cover;
-        background-position: center;
-        filter: brightness(0.5);
-      }
       #hint {
-        position: fixed; top: 50%; left: 50%;
-        transform: translate(-50%, -50%);
-        color: #fff; font-size: 20px;
+        position: fixed; bottom: 24px; left: 50%;
+        transform: translateX(-50%);
+        color: #fff; font-size: 14px;
         text-align: center; pointer-events: none;
-        z-index: 5; text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+        z-index: 5;
+        background: rgba(0,0,0,0.6);
+        padding: 6px 16px;
+        border-radius: 4px;
       }
-      #hint small { display: block; font-size: 13px; opacity: 0.6; margin-top: 8px; }
+      #hint small { display: block; font-size: 11px; opacity: 0.7; margin-top: 4px; }
       #sel {
         position: fixed;
         border: 2px solid #e00;
@@ -84,8 +81,7 @@
     </style>
   </head>
   <body>
-    <div id="bg"></div>
-    <div id="hint">正在載入螢幕截圖...<small>按 ESC 取消</small></div>
+    <div id="hint">拖拉框選要擷取的區域<small>按 ESC 取消</small></div>
     <div id="sel"></div>
     <div id="sz"></div>
 
@@ -106,7 +102,6 @@
     <script src="/tauri-init.js"></script>
     <script>
       (function() {
-        var bg = document.getElementById("bg");
         var hint = document.getElementById("hint");
         var sel = document.getElementById("sel");
         var sz = document.getElementById("sz");
@@ -119,13 +114,7 @@
         waitForTauri(function(ctx) {
           invoke = ctx.invoke;
           win = ctx.win;
-          invoke("get_screenshot_base64").then(function(dataUrl) {
-            bg.style.backgroundImage = "url(" + dataUrl + ")";
-            hint.innerHTML = "拖拉滑鼠框選要擷取的區域<small>按 ESC 取消</small>";
-            ready = true;
-          }).catch(function(err) {
-            hint.innerHTML = "截圖取得失敗：" + err + "<small>按 ESC 取消</small>";
-          });
+          ready = true;
         });
 
         // ESC 取消
@@ -217,7 +206,7 @@
           sel.style.display = "none";
           sz.style.display = "none";
           hint.style.display = "block";
-          hint.innerHTML = "拖拉滑鼠框選要擷取的區域<small>按 ESC 取消</small>";
+          hint.innerHTML = "拖拉框選要擷取的區域<small>按 ESC 取消</small>";
           // 清除殘留的 URL 輸入和偵測提示
           document.getElementById("url-input").value = "";
           document.getElementById("url-row").style.display = "none";
