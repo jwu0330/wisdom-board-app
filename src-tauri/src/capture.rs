@@ -271,11 +271,12 @@ pub fn get_detected_url(app: AppHandle) -> Option<String> {
 #[tauri::command]
 pub fn get_overlay_origin(app: AppHandle) -> (f64, f64) {
     let state = app.state::<ManagedOverlayState>();
-    if let Ok(guard) = state.lock() {
+    let result = if let Ok(guard) = state.lock() {
         (guard.overlay_origin_x, guard.overlay_origin_y)
     } else {
         (0.0, 0.0)
-    }
+    };
+    result
 }
 
 /// overlay 關閉或 build 失敗時，恢復所有面板並重新套用 locked 模式
